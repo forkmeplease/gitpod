@@ -1,15 +1,11 @@
 import { createHash, randomBytes } from "crypto";
-import * as shell from "shelljs";
 import * as fs from "fs";
 import { exec, ExecOptions } from "../../util/shell";
 import { MonitoringSatelliteInstaller } from "../../observability/monitoring-satellite";
 import {
-    wipeAndRecreateNamespace,
     setKubectlContextNamespace,
-    deleteNonNamespaceObjects,
     findFreeHostPorts,
     createNamespace,
-    helmInstallName,
     findLastHostPort,
     waitUntilAllPodsAreReady,
     waitForApiserver,
@@ -30,7 +26,7 @@ import { previewNameFromBranchName } from "../../util/preview";
 import { createDNSRecord } from "../../util/gcloud";
 import { SpanStatusCode } from "@opentelemetry/api";
 
-// used by both deploys (helm and Installer)
+// used by Installer
 const PROXY_SECRET_NAME = "proxy-config-certificates";
 const IMAGE_PULL_SECRET_NAME = "gcp-sa-registry-auth";
 const STACKDRIVER_SERVICEACCOUNT = JSON.parse(
@@ -268,6 +264,7 @@ async function deployToDevWithInstaller(
         deploymentKubeconfig,
         metaEnv({ slice: installerSlices.FIND_FREE_HOST_PORTS, silent: true }),
     );
+
     let nodeExporterPort = findLastHostPort(
         namespace,
         "node-exporter",
@@ -379,24 +376,6 @@ async function deployToDevWithInstaller(
     addAgentSmithToken(werft, deploymentConfig.namespace, installer.options.kubeconfigPath, tokenHash);
 
     werft.done(phases.DEPLOY);
-
-    async function cleanStateEnv(kubeconfig: string, shellOpts: ExecOptions) {
-        await wipeAndRecreateNamespace(helmInstallName, namespace, kubeconfig, {
-            ...shellOpts,
-            slice: installerSlices.CLEAN_ENV_STATE,
-        });
-        // cleanup non-namespace objects
-        werft.log(installerSlices.CLEAN_ENV_STATE, "removing old unnamespaced objects - this might take a while");
-        try {
-            await deleteNonNamespaceObjects(namespace, destname, kubeconfig, {
-                ...shellOpts,
-                slice: installerSlices.CLEAN_ENV_STATE,
-            });
-            werft.done(installerSlices.CLEAN_ENV_STATE);
-        } catch (err) {
-            werft.fail(installerSlices.CLEAN_ENV_STATE, err);
-        }
-    }
 }
 
 /*  A hash is caclulated from the branch name and a subset of that string is parsed to a number x,

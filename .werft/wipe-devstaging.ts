@@ -1,5 +1,5 @@
 import { Werft } from "./util/werft";
-import { wipePreviewEnvironmentAndNamespace, listAllPreviewNamespaces, helmInstallName } from "./util/kubectl";
+import { wipePreviewEnvironmentAndNamespace, listAllPreviewNamespaces } from "./util/kubectl";
 import * as Tracing from "./observability/tracing";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { ExecOptions } from "./util/shell";
@@ -21,7 +21,7 @@ async function wipePreviewCluster(shellOpts: ExecOptions) {
     }
 
     for (const namespace of namespaces) {
-        await wipePreviewEnvironmentAndNamespace(helmInstallName, namespace, CORE_DEV_KUBECONFIG_PATH, {
+        await wipePreviewEnvironmentAndNamespace(namespace, CORE_DEV_KUBECONFIG_PATH, {
             ...shellOpts,
             slice: "wipe",
         });
