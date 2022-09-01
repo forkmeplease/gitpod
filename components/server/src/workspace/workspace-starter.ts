@@ -873,6 +873,15 @@ export class WorkspaceStarter {
                 }
             }
 
+            if (
+                (await getExperimentsClientForBackend().getValueAsync("workspace_connection_limiting", false, {
+                    user,
+                })) &&
+                (await this.entitlementService.limitNetworkConnections(user, new Date()))
+            ) {
+                featureFlags = featureFlags.concat(["workspace_connection_limiting"]);
+            }
+
             let workspaceClass = "";
             const userTeams = await this.teamDB.findTeamsByUser(user.id);
             let classesEnabled = await getExperimentsClientForBackend().getValueAsync("workspace_classes", false, {
