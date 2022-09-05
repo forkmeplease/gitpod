@@ -1015,6 +1015,22 @@ export abstract class AbstractTypeORMWorkspaceDBImpl implements WorkspaceDB {
         return await queryBuilder.getCount();
     }
 
+    public async getActiveUserCount(): Promise<number> {
+        const workspaceInstanceRepo = await this.getWorkspaceInstanceRepo();
+        const since = new Date();
+        since.setDate(since.getDate() - 7);
+
+        // get the owners of workspaces with new instances created at-least
+        // 3 days of the last 7 days
+        return workspaceInstanceRepo
+            .createQueryBuilder("i")
+            .innerJoinAndMapOne("i.user", DBWorkspaceInstanceUser, "u", "i.id = u.instanceId")
+            .where("i.startedTime  > :since", { since: since.toISOString })
+            .groupBy("1")
+            .having("count(distinct date(i.startedTime)) >= 3")
+            .getCount();
+    }
+
     public async findAllWorkspaceAndInstances(
         offset: number,
         limit: number,
