@@ -1,7 +1,7 @@
 terraform {
   backend "gcs" {
-    bucket = "<gcs-bucket-name>"
-    prefix = "gcp/terraform.state"
+    bucket = "nightly-tests"
+    prefix = "tf-state/84430-azure.tfstate"
   }
 
   required_providers {

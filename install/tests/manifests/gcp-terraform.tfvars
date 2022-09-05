@@ -1,15 +1,15 @@
 # the cluster_name should be of length less than 15 characters and surrounded by double quotes
-cluster_name = "gp-84430-azure"
+cluster_name = "gp-${TF_VAR_TEST_ID}"
 
 # a cloudDNS zone and certificate request will be created for this domain; surround the domain name within double quotes
-domain_name = "84430-azure.tests.gitpod-self-hosted.com"
+domain_name = "${TF_VAR_TEST_ID}.${DOMAIN}"
 
 region      = "europe-west1"
 zone        = "europe-west1-d"
 project     = "sh-automated-tests"
 credentials = "/workspace/gcp.json"
 
-cluster_version = "1.22"
+cluster_version = "${CLUSTER_VERSION}"
 
 enable_external_database = true
 enable_external_storage  = true

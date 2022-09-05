@@ -61,27 +61,44 @@ aws-kubeconfig:
 	export KUBECONFIG=${KUBECONFIG} && \
 	aws eks update-kubeconfig --name ${TF_VAR_TEST_ID} --region eu-west-1 --kubeconfig ${KUBECONFIG} || echo "No cluster present"
 
+prepare-gcp-terraform:
+	export DOMAIN=${DOMAIN} && \
+	export CLUSTER_VERSION=$$TF_VAR_cluster_version && \
+	export DNS_CREDENTIALS=./dns-credentials.json && \
+	envsubst < ./manifests/gcp-terraform.tfvars > ../infra/single-cluster/gcp/terraform.tfvars && \
+	envsubst < ./manifests/gcp-dns.tf > ../infra/single-cluster/gcp/gcp-dns.tf && \
+    sed -i 's/<gcs-bucket-name>/nightly-tests/' ../infra/single-cluster/gcp/main.tf && \
+    sed -i 's/gcp\/terraform.state/""/' ../infra/single-cluster/gcp/main.tf
 
 .PHONY:
 ## gke-standard-cluster: Creates a zonal GKE cluster
-gke-standard-cluster: check-env-cluster-version
-	terraform init --upgrade && \
-	terraform workspace new $(TF_VAR_TEST_ID) || $(MAKE) select-workspace && \
-	rm -f ${KUBECONFIG} && \
-	$(MAKE) get-kubeconfig && \
-	[[ -f ${KUBECONFIG} ]] || terraform apply -target=module.gke -var kubeconfig=${KUBECONFIG} --auto-approve
+gke-standard-cluster: check-env-cluster-version prepare-gcp-terraform
+	$(MAKE) -C ../infra/single-cluster/gcp/ init
+	$(MAKE) select-workspace WORKDIR=../infra/single-cluster/gcp/
+	$(MAKE) -C ../infra/single-cluster/gcp/ apply
+	terraform -chdir=../infra/single-cluster/gcp output -json > gcp-output.yaml
+	cp ../infra/single-cluster/gcp/kubeconfig .
+	cp ../infra/single-cluster/gcp/gs-credentials.json .
+	cp ../infra/single-cluster/gcp/mysql-credentials.json .
+	cp ../infra/single-cluster/gcp/dns-credentials.json .
+	terraform -chdir=../infra/single-cluster/gcp/ apply -target=module.gcp-add-dns-record --auto-approve
 	@echo "Done creating GKE cluster"
 
+prepare-aws-terraform:
+	export DOMAIN=${DOMAIN} && \
+	export CLUSTER_VERSION=$$TF_VAR_cluster_version && \
+	envsubst < ./manifests/aws-terraform.tfvars > ../infra/single-cluster/aws/terraform.tfvars && \
+    sed -i 's/<s3-bucket-name>/nightly-tests/' ../infra/single-cluster/aws/main.tf && \
+    sed -i 's/aws\/terraform.state/tf-state\/${TF_VAR_TEST_ID}.tfstate/' ../infra/single-cluster/aws/main.tf
+
 ami_id_121 := "ami-060637af2651bc8bb"
-
 ami_id_122 := "ami-0733d755ed2c97a4d"
-
 ami_id_123 := "ami-05ec8881b9c2740d4"
 
 .PHONY:
 ## eks-standard-cluster: Creates an EKS cluster
 eks-standard-cluster: ami_id = $(if $(ami_id_${TF_VAR_cluster_version//.}),$(ami_id_${TF_VAR_cluster_version//.}),$(ami_id_122))
-eks-standard-cluster: check-env-cluster-version
+eks-standard-cluster: check-env-cluster-version prepare-aks-terraform
 	terraform init --upgrade && \
 	terraform workspace new $(TF_VAR_TEST_ID) || $(MAKE) select-workspace && \
 	rm -f ${KUBECONFIG} && \
@@ -180,21 +197,20 @@ get-base-config: get-github-config
 	envsubst < ${KOTS_KONFIG} > tmp_config.yml
 
 storage-config-gcp:
-	export BASE64_GCP_KEY=$$(cat $$TF_VAR_sa_creds | tr -d '\n' | base64 -w 0) && \
+	export BASE64_GCP_KEY=$$(cat gs-credentials.json | tr -d '\n' | base64 -w 0) && \
 	envsubst < ./manifests/kots-config-gcp-storage.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 registry-config-gcp:
-	export GCP_KEY=$$(cat $$TF_VAR_sa_creds | tr -d '\n' | jq -Rsa .) && \
+	export GCP_KEY=$$(cat gs-credentials.json | tr -d '\n' | jq -Rsa .) && \
 	envsubst < ./manifests/kots-config-gcp-registry.yaml > tmp_4_config.yml
 	yq m -i tmp_config.yml tmp_4_config.yml
 
 db-config-gcp:
-	export BASE64_GCP_KEY=$$(cat $$TF_VAR_sa_creds | tr -d '\n' | base64 -w 0) && \
-	export DB_OUTPUT=$$(terraform output -json k3s_database || terraform output -json gke_database) && \
-	export DB_INSTANCE=$$(echo $$DB_OUTPUT | yq r - 'instance') && \
-	export DB_PASSWORD=$$(echo $$DB_OUTPUT | yq r - 'password') && \
-	export DB_USER=$$(echo $$DB_OUTPUT | yq r - 'username') && \
+	export BASE64_GCP_KEY=$$(cat mysql-credentials.json | tr -d '\n' | base64 -w 0) && \
+	export DB_INSTANCE=$$(cat gcp-output.json | yq r - 'database.value.instance') && \
+	export DB_PASSWORD=$$(cat gcp-output.json | yq r - 'database.value.password') && \
+	export DB_USER=$$(cat gcp-output.json | yq r - 'database.value.username') && \
 	envsubst < ./manifests/kots-config-gcp-db.yaml > tmp_4_config.yml
 	envsubst < tmp_4_config.yml > tmp_5_config.yml
 	yq m -i tmp_config.yml tmp_5_config.yml
@@ -377,8 +393,9 @@ destroy-kubeconfig:
 	gsutil rm gs://nightly-tests/tf-state/${TF_VAR_TEST_ID}-kubeconfig || echo "No kubeconfig"
 	rm ${KUBECONFIG} || echo "No kubeconfig"
 
+WORKDIR ?= "."
 select-workspace:
-	terraform workspace select $(TF_VAR_TEST_ID)
+	terraform -chdir=${WORKDIR} workspace new $(TF_VAR_TEST_ID) || terraform -chdir=${WORKDIR} workspace select $(TF_VAR_TEST_ID)
 
 destroy-workspace:
 	terraform workspace select default
