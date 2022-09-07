@@ -1,11 +1,10 @@
-variable "gcp_zone" { default = "tests-gitpod-self-hosted-com" }
-variable "dns_sa_creds" { default = null }
+variable "gcp_zone" { default = "sh-tests-gitpod-self-hosted-com" }
 
 module "add-dns-record" {
-  source = "github.com/gitpod-io/gitpod//install/infra/modules/tools/cloud-dns-ns?ref=main"
-  credentials      = var.dns_sa_creds
+  source = "../../modules/tools/cloud-dns-ns"
+
   nameservers      = module.${cluster}.name_servers
-  dns_project      = "dns-for-playgrounds"
+  dns_project      = "sh-automated-tests"
   managed_dns_zone = var.gcp_zone
   domain_name      = var.domain_name
 }

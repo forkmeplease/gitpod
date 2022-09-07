@@ -82,7 +82,7 @@ const TEST_CONFIGURATIONS: { [name: string]: TestConfig } = {
         CLOUD: "azure",
         DESCRIPTION: `${op} Gitpod on AKS(version ${k8s_version})`,
         PHASES: [
-            "STANDARD_AKS_CLUSTER",
+            "STANDARD_CLUSTER",
             "CERT_MANAGER",
             "CLUSTER_ISSUER",
             "EXTERNALDNS",
@@ -96,11 +96,11 @@ const TEST_CONFIGURATIONS: { [name: string]: TestConfig } = {
         CLOUD: "aws",
         DESCRIPTION: `${op} an EKS cluster(version ${k8s_version})`,
         PHASES: [
-            "STANDARD_EKS_CLUSTER",
+            "STANDARD_CLUSTER",
             "CERT_MANAGER",
             "EXTERNALDNS",
-            "CLUSTER_ISSUER",
             "ADD_NS_RECORD",
+            "CLUSTER_ISSUER",
             "GENERATE_KOTS_CONFIG",
             "INSTALL_GITPOD",
             "CHECK_INSTALLATION",
@@ -123,10 +123,10 @@ const cloud: string = config.CLOUD;
 // Each phase should contain a `makeTarget` which
 // corresponds to a target in the Makefile in ./nightly-tests/Makefile
 const INFRA_PHASES: { [name: string]: InfraConfig } = {
-    STANDARD_GKE_CLUSTER: {
-        phase: "create-std-gke-cluster",
-        makeTarget: `gke-standard-cluster`,
-        description: `Creating a GCP GKE cluster(version: ${k8s_version}) with 1 nodepool each for workspace and server`,
+    STANDARD_CLUSTER: {
+        phase: "create-single-cluster",
+        makeTarget: `standard-cluster`,
+        description: `Creating a single ${cloud} managed cluster(version: ${k8s_version})`,
     },
     STANDARD_K3S_CLUSTER_ON_GCP: {
         phase: "create-std-k3s-cluster",

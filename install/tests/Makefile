@@ -61,7 +61,13 @@ azure-kubeconfig:
 ## aws-kubeconfig: Get the kubeconfig configuration for AWS EKS
 aws-kubeconfig:
 	export KUBECONFIG=${KUBECONFIG} && \
-	aws eks update-kubeconfig --name ${TF_VAR_TEST_ID} --region eu-west-1 --kubeconfig ${KUBECONFIG} || echo "No cluster present"
+	aws eks update-kubeconfig --name gp-${TF_VAR_TEST_ID} --region eu-west-1 --kubeconfig ${KUBECONFIG} || echo "No cluster present"
+
+
+# AWS AMI ID for each kubernetes version for eu-west-1 region
+ami_id_121 := "ami-060637af2651bc8bb"
+ami_id_122 := "ami-0733d755ed2c97a4d"
+ami_id_123 := "ami-05ec8881b9c2740d4"
 
 
 cluster_gcp := gke
@@ -70,10 +76,11 @@ cluster_aws := eks
 cluster_azure := aks
 
 prepare-terraform: cluster_mod = $(cluster_$(cloud))
+prepare-terraform: ami_id = $(if $(ami_id_${TF_VAR_cluster_version//.}),$(ami_id_${TF_VAR_cluster_version//.}),$(ami_id_122))
 prepare-terraform:
 	export DOMAIN=${DOMAIN} && \
 	export CLUSTER_VERSION=$$TF_VAR_cluster_version && \
-	export KUBECONFIG=${KUBECONFIG} && \
+	export KUBECONFIG=${KUBECONFIG} IMAGE_ID=${ami_id} && \
 	envsubst < ./manifests/$(cloud)-terraform.tfvars > $(TF_MOD)/terraform.tfvars
 	export cluster=$(cluster_mod) && \
 	envsubst < ./manifests/gcp-dns.tf > $(TF_MOD)/gcp-dns.tf
@@ -85,7 +92,6 @@ standard-cluster: check-env-cloud check-env-cluster-version prepare-terraform
 	$(MAKE) -C $(TF_MOD) init
 	$(MAKE) select-workspace WORKDIR=$(TF_MOD)
 	$(MAKE) -C $(TF_MOD) apply-cluster
-	terraform -chdir=$(TF_MOD) output -json > $(cloud)-output.json
 	@echo "Done creating GKE cluster"
 
 .PHONY:
@@ -110,6 +116,8 @@ cluster-issuer: check-env-cloud
 	$(MAKE) -C $(TF_MOD) init
 	$(MAKE) select-workspace WORKDIR=$(TF_MOD)
 	$(MAKE) -C $(TF_MOD) install-cluster-issuer
+	terraform -chdir=$(TF_MOD) refresh
+	terraform -chdir=$(TF_MOD) output -json > $(cloud)-output.json
 	@echo "Done creating cluster issuer"
 
 .PHONY:
@@ -146,22 +154,21 @@ get-base-config: get-github-config
 	export PATCH=$$(cat $$CONFIG_PATCH | base64 -w 0) || export PATCH="" && \
 	envsubst < ${KOTS_KONFIG} > tmp_config.yml
 
-gcp_storage_credentials := $$(cat gcp-output.json | yq r - 'storage.value.service_account_key_path')
-gcp_registry_credentials := $$(cat gcp-output.json | yq r - 'registry.value.password_file_path')
-gcp_db_credentials := $$(cat gcp-output.json | yq r - 'database.value.service_account_key_path')
-
 storage-config-gcp:
-	export BASE64_GCP_KEY=$$(cat $(TF_MOD)/${gcp_storage_credentials} | tr -d '\n' | base64 -w 0) && \
+	export gcp_storage_credentials=$$(cat gcp-output.json | yq r - 'storage.value.service_account_key_path') && \
+	export BASE64_GCP_KEY=$$(cat $(TF_MOD)/$$gcp_storage_credentials | tr -d '\n' | base64 -w 0) && \
 	envsubst < ./manifests/kots-config-gcp-storage.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 registry-config-gcp:
-	export GCP_KEY=$$(cat $(TF_MOD)/${gcp_registry_credentials} | tr -d '\n' | jq -Rsa .) && \
+	export gcp_registry_credentials=$$(cat gcp-output.json | yq r - 'registry.value.password_file_path') && \
+	export GCP_KEY=$$(cat $(TF_MOD)/$$gcp_registry_credentials | tr -d '\n' | jq -Rsa .) && \
 	envsubst < ./manifests/kots-config-gcp-registry.yaml > tmp_4_config.yml
 	yq m -i tmp_config.yml tmp_4_config.yml
 
 db-config-gcp:
-	export BASE64_GCP_KEY=$$(cat $(TF_MOD)/${gcp_db_credentials} | tr -d '\n' | base64 -w 0) && \
+	export gcp_db_credentials=$$(cat gcp-output.json | yq r - 'database.value.service_account_key_path') && \
+	export BASE64_GCP_KEY=$$(cat $(TF_MOD)/$$gcp_db_credentials | tr -d '\n' | base64 -w 0) && \
 	export DB_INSTANCE=$$(cat gcp-output.json | yq r - 'database.value.instance') && \
 	export DB_PASSWORD=$$(cat gcp-output.json | yq r - 'database.value.password') && \
 	export DB_USER=$$(cat gcp-output.json | yq r - 'database.value.username') && \
@@ -170,56 +177,56 @@ db-config-gcp:
 	yq m -i tmp_config.yml tmp_5_config.yml
 
 registry-config-azure:
-	export SERVER=$$(terraform output -json azure_registry | yq r - 'server') && \
-	export URL=$$(terraform output -json azure_registry | yq r - 'url') && \
-	export PASSWORD=$$(terraform output -json azure_registry | yq r - 'password') && \
-	export USERNAME=$$(terraform output -json azure_registry | yq r - 'username') && \
+	export SERVER=$$(cat azure-output.json | yq r - 'server') && \
+	export URL=$$(cat azure-output.json | yq r - 'url') && \
+	export PASSWORD=$$(cat azure-output.json | yq r - 'password') && \
+	export USERNAME=$$(cat azure-output.json | yq r - 'username') && \
 	envsubst < ./manifests/kots-config-azure-registry.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 storage-config-azure:
-	export PASSWORD=$$(terraform output -json azure_storage | yq r - 'account_name') && \
-	export USERNAME=$$(terraform output -json azure_storage | yq r - 'account_key') && \
-	export REGION=$$(terraform output -json azure_storage | yq r - 'storage_region') && \
+	export PASSWORD=$$(cat azure-output.json | yq r - 'account_name') && \
+	export USERNAME=$$(cat azure-output.json | yq r - 'account_key') && \
+	export REGION=$$(cat azure-output.json | yq r - 'storage_region') && \
 	envsubst < ./manifests/kots-config-azure-storage.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 db-config-azure:
-	export DBHOST=$$(terraform output -json azure_database | yq r - 'host') && \
-	export DBPASS=$$(terraform output -json azure_database | yq r - 'password') && \
-	export DBUSER=$$(terraform output -json azure_database | yq r - 'username') && \
+	export DBHOST=$$(cat azure-output.json | yq r - 'database.value.host') && \
+	export DBPASS=$$(cat azure-output.json | yq r - 'database.value.password') && \
+	export DBUSER=$$(cat azure-output.json | yq r - 'database.value.username') && \
 	envsubst < ./manifests/kots-config-azure-db.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 db-config-aws:
-	export DBHOST=$$(terraform output -json aws_database | yq r - 'host') && \
-	export DBPASS=$$(terraform output -json aws_database | yq r - 'password') && \
-	export DBUSER=$$(terraform output -json aws_database | yq r - 'username') && \
+	export DBHOST=$$(cat aws-output.json | yq r - 'database.value.host') && \
+	export DBPASS=$$(cat aws-output.json | yq r - 'database.value.password') && \
+	export DBUSER=$$(cat aws-output.json | yq r - 'database.value.username') && \
 	envsubst < ./manifests/kots-config-aws-db.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 storage-config-aws:
-	export REGION=$$(terraform output -json aws_storage | yq r - 'region') && \
-	export ENDPOINT=$$(terraform output -json aws_storage | yq r - 'endpoint') && \
-	export BUCKET=$$(terraform output -json aws_storage | yq r - 'bucket_name') && \
-	export S3_ACCESS_KEY_ID=$$(terraform output -json aws_storage | yq r - 'access_key_id') && \
-	export S3_SECRET_ACCESS_KEY=$$(terraform output -json aws_storage | yq r - 'secret_access_key') && \
+	export REGION=$$(cat aws-output.json | yq r - 'storage.value.region') && \
+	export ENDPOINT=$$(cat aws-output.json | yq r - 'storage.value.endpoint') && \
+	export BUCKET=$$(cat aws-output.json | yq r - 'storage.value.bucket_name') && \
+	export S3_ACCESS_KEY_ID=$$(cat aws-output.json | yq r - 'storage.value.access_key_id') && \
+	export S3_SECRET_ACCESS_KEY=$$(cat aws-output.json | yq r - 'storage.value.secret_access_key') && \
 	envsubst < ./manifests/kots-config-aws-storage.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 s3-registry-backend-config-aws: # this registry config involves using s3 backend for incluster registry
-	export REGION=$$(terraform output -json aws_s3_registry_backend | yq r - 'region') && \
-	export ENDPOINT=$$(terraform output -json aws_s3_registry_backend | yq r - 'endpoint') && \
-	export BUCKET=$$(terraform output -json aws_s3_registry_backend | yq r - 'bucket_name') && \
-	export S3_ACCESS_KEY_ID=$$(terraform output -json aws_s3_registry_backend | yq r - 'access_key_id') && \
-	export S3_SECRET_ACCESS_KEY=$$(terraform output -json aws_s3_registry_backend | yq r - 'secret_access_key') && \
+	export REGION=$$(cat aws-output.json | yq r - 'storage.value.region') && \
+	export ENDPOINT=$$(cat aws-output.json | yq r - 'storage.value.endpoint') && \
+	export BUCKET=$$(cat aws-output.json | yq r - 'storage.value.bucket_name') && \
+	export S3_ACCESS_KEY_ID=$$(cat aws-output.json | yq r - 'storage.value.access_key_id') && \
+	export S3_SECRET_ACCESS_KEY=$$(cat aws-output.json | yq r - 'storage.value.secret_access_key') && \
 	envsubst < ./manifests/kots-config-aws-s3-backend.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 registry-config-aws:
-	export SERVER=$$(terraform output -json aws_registry | yq r - 'server' | cut -d / -f 1) && \
-	export PASSWORD=$$(terraform output -json aws_registry | yq r - 'password') && \
-	export USERNAME=$$(terraform output -json aws_registry | yq r - 'username') && \
+	export SERVER=$$(cat aws-output.json | yq r - 'server' | cut -d / -f 1) && \
+	export PASSWORD=$$(cat aws-output.json | yq r - 'password') && \
+	export USERNAME=$$(cat aws-output.json | yq r - 'username') && \
 	envsubst < ./manifests/kots-config-aws-registry.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
@@ -245,8 +252,6 @@ generate-kots-config: cloud_registry = $(if $(findstring external,$(registry)),$
 generate-kots-config: cloud_db = $(if $(findstring external,$(db)),$(cloud),incluster)
 ## generate-kots-config: Generate the kots config based on test config
 generate-kots-config: check-env-cloud get-base-config
-	$(MAKE) -C $(TF_MOD) init
-	$(MAKE) select-workspace WORKDIR=$(TF_MOD)
 	$(MAKE) storage-config-${cloud_storage}
 	$(MAKE) db-config-${cloud_db}
 	$(MAKE) registry-config-${cloud_registry}
@@ -280,7 +285,7 @@ time_to_sleep_azure := 600 # azure seem to take more time to fullfil DNS propoga
 time_to_sleep := 300
 
 wait_time := 180
-wait_time_azure := 180
+wait_time_azure := 300
 
 delete-cm-setup: sleeptime=$(if $(time_to_sleep_$(cloud)),$(time_to_sleep_$(cloud)),${time_to_sleep})
 delete-cm-setup: waittime=$(if $(wait_time_$(cloud)),$(wait_time_$(cloud)),${wait_time})
