@@ -7,10 +7,11 @@ domain_name = "${TF_VAR_TEST_ID}.${DOMAIN}"
 region      = "europe-west1"
 zone        = "europe-west1-d"
 project     = "sh-automated-tests"
-credentials = "/workspace/gcp.json"
 
 cluster_version = "${CLUSTER_VERSION}"
 
 enable_external_database = true
 enable_external_storage  = true
 enable_external_registry = true
+
+kubeconfig = "${KUBECONFIG}"

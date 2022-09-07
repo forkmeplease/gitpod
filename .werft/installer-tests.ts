@@ -20,7 +20,7 @@ const upgrade: string = annotations.upgrade || "false"; // setting to true will 
 const skipTests: string = annotations.skipTests || "false"; // setting to true skips the integration tests
 const deps: string = annotations.deps || ""; // options: ["external", "internal"] setting to `external` will ensure that all resource dependencies(storage, db, registry) will be external. if unset, a random selection will be used
 
-const baseDomain: string = "tests.gitpod-self-hosted.com"
+const baseDomain: string = "sh-tests.gitpod-self-hosted.com"
 
 const slackHook = new Map<string, string>([
     ["self-hosted-jobs", process.env.SH_SLACK_NOTIFICATION_PATH.trim()],
@@ -56,9 +56,10 @@ const TEST_CONFIGURATIONS: { [name: string]: TestConfig } = {
         CLOUD: "gcp",
         DESCRIPTION: `${op} Gitpod on GKE managed cluster(version ${k8s_version})`,
         PHASES: [
-            "STANDARD_GKE_CLUSTER",
+            "STANDARD_CLUSTER",
             "CERT_MANAGER",
-            "GCP_MANAGED_DNS",
+            "EXTERNALDNS",
+            "ADD_NS_RECORD",
             "CLUSTER_ISSUER",
             "GENERATE_KOTS_CONFIG",
             "INSTALL_GITPOD",
@@ -66,7 +67,7 @@ const TEST_CONFIGURATIONS: { [name: string]: TestConfig } = {
         ],
     },
     STANDARD_K3S_TEST: {
-        CLOUD: "gcp", // the cloud provider is still GCP
+        CLOUD: "k3s",
         DESCRIPTION: `${op} Gitpod on a K3s cluster(version ${k8s_version}) on a GCP instance with ubuntu ${os_version}`,
         PHASES: [
             "STANDARD_K3S_CLUSTER_ON_GCP",
@@ -146,11 +147,6 @@ const INFRA_PHASES: { [name: string]: InfraConfig } = {
         phase: "setup-cert-manager",
         makeTarget: "cert-manager",
         description: "Sets up cert-manager and optional cloud dns secret",
-    },
-    GCP_MANAGED_DNS: {
-        phase: "setup-external-dns-with-cloud-dns",
-        makeTarget: "managed-dns",
-        description: "Sets up external-dns & cloudDNS config",
     },
     GENERATE_KOTS_CONFIG: {
         phase: "generate-kots-config",

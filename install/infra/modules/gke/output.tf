@@ -39,6 +39,7 @@ output "registry" {
     server   = regex("[^/?#]*", data.google_container_registry_repository.gitpod[0].repository_url)
     username = "_json_key"
     password = "Copy the output of the command: cat ./gs-credentials.json | tr -s '\n' ' '"
+    password_file_path = "./gs-credentials.json"
   }, "No container registry created")
 }
 

@@ -1,0 +1,44 @@
+ami_id_121 := "ami-060637af2651bc8bb"
+ami_id_122 := "ami-0733d755ed2c97a4d"
+ami_id_123 := "ami-05ec8881b9c2740d4"
+
+.PHONY:
+## eks-standard-cluster: Creates an EKS cluster
+eks-standard-cluster: ami_id = $(if $(ami_id_${TF_VAR_cluster_version//.}),$(ami_id_${TF_VAR_cluster_version//.}),$(ami_id_122))
+eks-standard-cluster: check-env-cluster-version prepare-aks-terraform
+	terraform init --upgrade && \
+	terraform workspace new $(TF_VAR_TEST_ID) || $(MAKE) select-workspace && \
+	rm -f ${KUBECONFIG} && \
+	$(MAKE) get-kubeconfig && \
+	[[ -f ${KUBECONFIG} ]] || terraform apply -target=module.eks -var kubeconfig=${KUBECONFIG} -var eks_node_image_id=${ami_id} --auto-approve
+	@echo "Done creating EKS cluster"
+
+.PHONY:
+## aks-standard-cluster: Creates an AKS cluster
+aks-standard-cluster: check-env-cluster-version
+	terraform init --upgrade && \
+	terraform workspace new $(TF_VAR_TEST_ID) || $(MAKE) select-workspace && \
+	rm -f ${KUBECONFIG} && \
+	$(MAKE) get-kubeconfig && \
+	[[ -f ${KUBECONFIG} ]] || terraform apply -target=module.aks -var kubeconfig=${KUBECONFIG} --auto-approve
+	@echo "Done creating AKS cluster"
+
+
+image_id_1804 := "ubuntu-1804-bionic-v20220712"
+
+image_id_2004 := "ubuntu-2004-focal-v20220712"
+
+image_id_2204 := "ubuntu-2204-jammy-v20220712a"
+
+os_version ?= "2004"
+.PHONY:
+## k3s-standard-cluster: Creates a K3S cluster on GCP with one master and 1 worker node
+k3s-standard-cluster: image_id = $(if $(image_id_$(os_version)),$(image_id_$(os_version)),$(image_id_2004))
+k3s-standard-cluster: check-env-cluster-version
+	terraform init --upgrade && \
+	terraform workspace new $(TF_VAR_TEST_ID) || $(MAKE) select-workspace && \
+	rm -f ${KUBECONFIG} && \
+	$(MAKE) get-kubeconfig && \
+	[[ -f ${KUBECONFIG} ]] || terraform apply -target=module.k3s -var kubeconfig=${KUBECONFIG} -var k3s_node_image_id=${image_id} --auto-approve && \
+	$(MAKE) upload-kubeconfig-to-gcp # we upload the file to GCP since we cannot retrieve the file against without SSHing to the master
+	@echo "Done creating k3s cluster"
