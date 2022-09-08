@@ -4,10 +4,16 @@
 
 package init
 
+import (
+	"github.com/gitpod-io/gitpod/installer/pkg/common"
+)
+
 const (
-	Component       = "dbinit"
-	dbSessionsImage = "library/mysql"
-	dbSessionsTag   = "5.7.34"
-	initScriptDir   = "files"
-	sqlInitScripts  = "db-init-scripts"
+	Component         = "dbinit"
+	dbSessionsImage   = "library/mysql"
+	dbSessionsTag     = "5.7.34"
+	initScriptDir     = "files"
+	sqlInitScripts    = "db-init-scripts"
+	customCaMountName = "db-custom-ca"
+	customCaPath      = "/" + common.DBCustomCaFileName
 )

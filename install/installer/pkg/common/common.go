@@ -260,6 +260,17 @@ func DatabaseEnv(cfg *config.Config) (res []corev1.EnvVar) {
 		},
 	)
 
+	if cfg.Database.SSL != nil && cfg.Database.SSL.CustomCA != "" {
+		secretRef = corev1.LocalObjectReference{Name: DBCustomCaSecretName}
+		envvars = append(envvars, corev1.EnvVar{
+			Name: "DB_CUSTOM_CA",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: secretRef,
+				Key:                  DBCustomCaFileName,
+			}},
+		})
+	}
+
 	return envvars
 }
 
