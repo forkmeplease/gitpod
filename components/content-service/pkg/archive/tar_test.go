@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"github.com/sirupsen/logrus"
 )
 
 func TestExtractTarbal(t *testing.T) {
@@ -77,7 +79,7 @@ func TestExtractTarbal(t *testing.T) {
 				t.Fatalf("cannot extract tar content: %v", err)
 			}
 
-			err = ExtractTarbal(context.Background(), buf, targetFolder)
+			err = ExtractTarbal(context.Background(), buf, targetFolder, logrus.Fields{})
 			if err != nil {
 				t.Fatalf("cannot extract tar content: %v", err)
 			}

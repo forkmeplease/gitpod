@@ -22,6 +22,7 @@ import (
 	gcpstorage "cloud.google.com/go/storage"
 	validation "github.com/go-ozzo/ozzo-validation"
 	"github.com/opentracing/opentracing-go"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/xerrors"
 	"google.golang.org/api/googleapi"
@@ -193,6 +194,10 @@ func (rs *DirectGCPStorage) download(ctx context.Context, destination string, bk
 		return true, err
 	}
 	defer os.RemoveAll(backupDir)
+	logFields := logrus.Fields{
+		"gcsBkt": bkt,
+		"gcsObj": obj,
+	}
 
 	var wg sync.WaitGroup
 
@@ -213,6 +218,7 @@ func (rs *DirectGCPStorage) download(ctx context.Context, destination string, bk
 
 		log.WithField("flags", args).Debug("gsutil flags")
 
+		log.WithFields(logFields).Info("[Perf] Starting download of content")
 		cmd := exec.Command("/bin/bash", []string{"-c", args}...)
 		var out []byte
 		out, err = cmd.CombinedOutput()
@@ -221,6 +227,7 @@ func (rs *DirectGCPStorage) download(ctx context.Context, destination string, bk
 			err = xerrors.Errorf("unexpected error downloading backup")
 			return
 		}
+		log.WithFields(logFields).Info("[Perf] Finished download of content")
 	}()
 
 	wg.Wait()
@@ -231,7 +238,7 @@ func (rs *DirectGCPStorage) download(ctx context.Context, destination string, bk
 	}
 	defer rc.Close()
 
-	err = extractTarbal(ctx, destination, rc, mappings)
+	err = extractTarbal(ctx, destination, rc, mappings, logFields)
 	if err != nil {
 		return true, err
 	}

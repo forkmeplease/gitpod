@@ -18,6 +18,7 @@ import (
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/opentracing/opentracing-go"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/xerrors"
 
 	"github.com/gitpod-io/gitpod/common-go/log"
@@ -211,7 +212,7 @@ func (rs *DirectMinIOStorage) download(ctx context.Context, destination string, 
 	}
 	defer rc.Close()
 
-	err = extractTarbal(ctx, destination, rc, mappings)
+	err = extractTarbal(ctx, destination, rc, mappings, logrus.Fields{})
 	if err != nil {
 		return true, err
 	}

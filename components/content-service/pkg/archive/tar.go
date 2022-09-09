@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 	"golang.org/x/xerrors"
 
@@ -55,7 +56,7 @@ func WithGIDMapping(mappings []IDMapping) TarOption {
 }
 
 // ExtractTarbal extracts an OCI compatible tar file src to the folder dst, expecting the overlay whiteout format
-func ExtractTarbal(ctx context.Context, src io.Reader, dst string, opts ...TarOption) (err error) {
+func ExtractTarbal(ctx context.Context, src io.Reader, dst string, logFields logrus.Fields, opts ...TarOption) (err error) {
 	type Info struct {
 		UID, GID  int
 		IsSymlink bool
@@ -81,6 +82,7 @@ func ExtractTarbal(ctx context.Context, src io.Reader, dst string, opts ...TarOp
 	finished := make(chan bool)
 	m := make(map[string]Info)
 
+	log.WithFields(logFields).Info("[Perf] Starting extraction of tar")
 	go func() {
 		defer close(finished)
 		for {
@@ -124,7 +126,9 @@ func ExtractTarbal(ctx context.Context, src io.Reader, dst string, opts ...TarOp
 	log.WithField("log", string(msg)).Debug("decompressing tar stream log")
 
 	<-finished
+	log.WithFields(logFields).Info("[Perf] Finished extraction of tar")
 
+	log.WithFields(logFields).Info("[Perf] Starting chown")
 	// lets create a sorted list of pathes and chown depth first.
 	paths := make([]string, 0, len(m))
 	for path := range m {
@@ -148,6 +152,7 @@ func ExtractTarbal(ctx context.Context, src io.Reader, dst string, opts ...TarOp
 			log.WithError(err).WithField("uid", uid).WithField("gid", gid).WithField("path", p).Debug("cannot chown")
 		}
 	}
+	log.WithFields(logFields).Info("[Perf] Finished chown")
 
 	log.WithField("duration", time.Since(start).Milliseconds()).Debug("untar complete")
 	return nil

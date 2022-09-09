@@ -17,6 +17,7 @@ import (
 	"github.com/gitpod-io/gitpod/common-go/log"
 	config "github.com/gitpod-io/gitpod/content-service/api/config"
 	"github.com/gitpod-io/gitpod/content-service/pkg/archive"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -248,8 +249,8 @@ func NewPresignedAccess(c *config.StorageConfig) (PresignedAccess, error) {
 	}
 }
 
-func extractTarbal(ctx context.Context, dest string, src io.Reader, mappings []archive.IDMapping) error {
-	err := archive.ExtractTarbal(ctx, src, dest, archive.WithUIDMapping(mappings), archive.WithGIDMapping(mappings))
+func extractTarbal(ctx context.Context, dest string, src io.Reader, mappings []archive.IDMapping, logFields logrus.Fields) error {
+	err := archive.ExtractTarbal(ctx, src, dest, logFields, archive.WithUIDMapping(mappings), archive.WithGIDMapping(mappings))
 	if err != nil {
 		return xerrors.Errorf("tar %s: %s", dest, err.Error())
 	}

@@ -11,6 +11,7 @@ import (
 	"golang.org/x/xerrors"
 
 	"github.com/gitpod-io/gitpod/content-service/pkg/archive"
+	"github.com/sirupsen/logrus"
 )
 
 // NamedURLDownloader offers downloads from fixed URLs
@@ -42,7 +43,7 @@ func (d *NamedURLDownloader) Download(ctx context.Context, destination string, n
 	}
 	defer resp.Body.Close()
 
-	err = extractTarbal(ctx, destination, resp.Body, mappings)
+	err = extractTarbal(ctx, destination, resp.Body, mappings, logrus.Fields{})
 	if err != nil {
 		return true, err
 	}
