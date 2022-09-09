@@ -49,7 +49,11 @@ interface None {
 /** Sessions is handled with old subscription logic based on Chargebee */
 interface Chargebee {
     mode: "chargebee";
+
     canUpgradeToUBB?: boolean;
+
+    /** Name of team(s) that block switching to usage-based */
+    teamNames?: string[];
 }
 
 /** Session is handld with new usage-based logic */

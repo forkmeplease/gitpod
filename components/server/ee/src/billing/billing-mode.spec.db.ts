@@ -35,7 +35,7 @@ import {
 } from "@gitpod/gitpod-protocol/lib/team-subscription-protocol";
 import * as chai from "chai";
 import { Container, ContainerModule } from "inversify";
-import { suite, test, timeout } from "mocha-typescript";
+import { only, suite, test, timeout } from "mocha-typescript";
 import Stripe from "stripe";
 import { Config } from "../../../src/config";
 import { StripeService } from "../user/stripe-service";
@@ -84,6 +84,7 @@ class ConfigCatClientMock implements Client {
 
 @suite
 class BillingModeSpec {
+    @only
     @test(timeout(20000))
     public async testBillingModes() {
         const userId = "123";
@@ -97,6 +98,7 @@ class BillingModeSpec {
         function user(): User {
             return {
                 id: userId,
+                name: `user-${userId}`,
                 creationDate,
                 identities: [],
             };
@@ -252,6 +254,7 @@ class BillingModeSpec {
                 expectation: {
                     mode: "chargebee",
                     canUpgradeToUBB: true,
+                    teamNames: ["Team Subscription 'Team Unleashed' (owner: user-123)"],
                 },
             },
             {
@@ -268,6 +271,7 @@ class BillingModeSpec {
                 expectation: {
                     mode: "chargebee",
                     canUpgradeToUBB: true,
+                    teamNames: ["Team Subscription 'Team Unleashed' (owner: user-123)"],
                 },
             },
             {
@@ -399,6 +403,7 @@ class BillingModeSpec {
                 },
                 expectation: {
                     mode: "chargebee",
+                    teamNames: ["team-123"],
                 },
             },
             // team: transition chargebee -> UBB
@@ -413,6 +418,7 @@ class BillingModeSpec {
                 expectation: {
                     mode: "chargebee",
                     canUpgradeToUBB: true,
+                    teamNames: ["team-123"],
                 },
             },
             {

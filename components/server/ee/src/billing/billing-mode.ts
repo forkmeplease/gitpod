@@ -13,10 +13,10 @@ import { Subscription } from "@gitpod/gitpod-protocol/lib/accounting-protocol";
 import { Config } from "../../../src/config";
 import { StripeService } from "../user/stripe-service";
 import { BillingMode } from "@gitpod/gitpod-protocol/lib/billing-mode";
-import { TeamDB, TeamSubscription2DB, UserDB } from "@gitpod/gitpod-db/lib";
+import { TeamDB, TeamSubscription2DB, TeamSubscriptionDB, UserDB } from "@gitpod/gitpod-db/lib";
 import { Plans } from "@gitpod/gitpod-protocol/lib/plans";
 import { AttributionId } from "@gitpod/gitpod-protocol/lib/attribution";
-import { TeamSubscription2 } from "@gitpod/gitpod-protocol/lib/team-subscription-protocol";
+import { TeamSubscription, TeamSubscription2 } from "@gitpod/gitpod-protocol/lib/team-subscription-protocol";
 
 export const BillingModes = Symbol("BillingModes");
 export interface BillingModes {
@@ -42,6 +42,7 @@ export class BillingModesImpl implements BillingModes {
     @inject(ConfigCatClientFactory) protected readonly configCatClientFactory: ConfigCatClientFactory;
     @inject(SubscriptionService) protected readonly subscriptionSvc: SubscriptionService;
     @inject(StripeService) protected readonly stripeSvc: StripeService;
+    @inject(TeamSubscriptionDB) protected readonly teamSubscriptionDb: TeamSubscriptionDB;
     @inject(TeamSubscription2DB) protected readonly teamSubscription2Db: TeamSubscription2DB;
     @inject(TeamDB) protected readonly teamDB: TeamDB;
     @inject(UserDB) protected readonly userDB: UserDB;
@@ -103,13 +104,16 @@ export class BillingModesImpl implements BillingModes {
 
         // 2. Any personal subscriptions?
         // Chargebee takes precedence
-        function isTeamSubscription(s: Subscription): boolean {
-            return !!Plans.getById(s.planId)?.team;
+        function isPersonalSubscription(s: Subscription): boolean {
+            return !Plans.getById(s.planId)?.team;
+        }
+        function isOldTeamSubscription(s: Subscription): boolean {
+            return !!Plans.getById(s.planId)?.team && !s.teamMembershipId;
         }
         const cbSubscriptions = await this.subscriptionSvc.getActivePaidSubscription(user.id, now);
-        const cbTeamSubscriptions = cbSubscriptions.filter((s) => isTeamSubscription(s));
+        const cbTeamSubscriptions = cbSubscriptions.filter((s) => isOldTeamSubscription(s));
         const cbPersonalSubscriptions = cbSubscriptions.filter(
-            (s) => !isTeamSubscription(s) && s.planId !== Plans.FREE_OPEN_SOURCE.chargebeeId,
+            (s) => isPersonalSubscription(s) && s.planId !== Plans.FREE_OPEN_SOURCE.chargebeeId,
         );
         let canUpgradeToUBB = false;
         if (cbPersonalSubscriptions.length > 0) {
@@ -153,13 +157,48 @@ export class BillingModesImpl implements BillingModes {
             return result;
         }
         if (hasCbTeam || hasCbTeamSeat || canUpgradeToUBB) {
+            const result: BillingMode = { mode: "chargebee", canUpgradeToUBB: true }; // UBB is enabled, but no seat nor subscription yet.
+
             // TODO(gpl): Q: How to test the free-tier, then? A: Make sure you have no CB seats anymore
-            // For that we could add a new field here, which lists all seats that are "blocking" you, and display them in the UI somewhere.
-            return { mode: "chargebee", canUpgradeToUBB: true }; // UBB is enabled, but no seat nor subscription yet.
+            // For that we lists all Team Subscriptions/Team Memberships that are "blocking" you, and display them in the UI somewhere.
+            const teamNames = [];
+            for (const tm of teamsModes) {
+                if (tm.mode === "chargebee" && tm.teamNames) {
+                    teamNames.push(`Team Membership: ${tm.teamNames}`);
+                }
+            }
+            const tsOwners = await Promise.all(cbTeamSubscriptions.map((s) => this.mapTeamSubscriptionToOwnerName(s)));
+            for (const owner of tsOwners) {
+                if (!owner) {
+                    continue;
+                }
+                const [ts, ownerName] = owner;
+                teamNames.push(`Team Subscription '${Plans.getById(ts.planId)?.name}' (owner: ${ownerName})`);
+            }
+            if (teamNames.length > 0) {
+                result.teamNames = teamNames;
+            }
+
+            return result;
         }
 
         // UBB free tier
         return { mode: "usage-based" };
+    }
+
+    protected async mapTeamSubscriptionToOwnerName(s: Subscription): Promise<[TeamSubscription, string] | undefined> {
+        if (!s || !s.teamSubscriptionSlotId) {
+            return undefined;
+        }
+        const ts = await this.teamSubscriptionDb.findTeamSubscriptionBySlotId(s.teamSubscriptionSlotId!);
+        if (!ts) {
+            return undefined;
+        }
+        const user = await this.userDB.findUserById(ts.userId);
+        if (!user) {
+            return undefined;
+        }
+        return [ts, user.name || user.fullName || "---"];
     }
 
     async getBillingModeForTeam(team: Team, _now: Date): Promise<BillingMode> {
@@ -190,12 +229,13 @@ export class BillingModesImpl implements BillingModes {
         // 2. Any Chargbee TeamSubscription2 (old Team Subscriptions are not relevant here, as they are not associated with a team)
         const teamSubscription = await this.teamSubscription2Db.findForTeam(team.id, now);
         if (teamSubscription && TeamSubscription2.isActive(teamSubscription, now)) {
+            const result: BillingMode = { mode: "chargebee", teamNames: [team.name] };
             if (TeamSubscription2.isCancelled(teamSubscription, now)) {
-                // The team has a paid subscription, but it's already cancelled, and UBB enabled
-                return { mode: "chargebee", canUpgradeToUBB: true };
+                // The team has a paid subscription, but it's already cancelled: can upgrade to UBB!
+                result.canUpgradeToUBB = true;
             }
 
-            return { mode: "chargebee" };
+            return result;
         }
 
         // 3. Now we're usage-based. We only have to figure out whether we have a plan yet or not.
