@@ -26,6 +26,4 @@ create_external_storage  = true
 # set the following to true. You can re-use the above bucket or incluster registry otherwise.
 create_external_storage_for_registry_backend = false
 
-create_external_registry = true
-
 kubeconfig = "${KUBECONFIG}"

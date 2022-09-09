@@ -54,9 +54,8 @@ gcp-kubeconfig:
 
 ## azure-kubeconfig: Get the kubeconfig configuration for Azure AKS
 azure-kubeconfig:
-	az login --service-principal -u $$ARM_CLIENT_ID -p $$ARM_CLIENT_SECRET  --tenant $$ARM_TENANT_ID
 	export KUBECONFIG=${KUBECONFIG} && \
-	az aks get-credentials --name p$$TF_VAR_TEST_ID-cluster --resource-group p$$TF_VAR_TEST_ID --file ${KUBECONFIG} || echo "No cluster present"
+	az aks get-credentials --name gp-$$TF_VAR_TEST_ID-cluster --resource-group gp-$$TF_VAR_TEST_ID --file ${KUBECONFIG} || echo "No cluster present"
 
 ## aws-kubeconfig: Get the kubeconfig configuration for AWS EKS
 aws-kubeconfig:
@@ -177,17 +176,17 @@ db-config-gcp:
 	yq m -i tmp_config.yml tmp_5_config.yml
 
 registry-config-azure:
-	export SERVER=$$(cat azure-output.json | yq r - 'server') && \
-	export URL=$$(cat azure-output.json | yq r - 'url') && \
-	export PASSWORD=$$(cat azure-output.json | yq r - 'password') && \
-	export USERNAME=$$(cat azure-output.json | yq r - 'username') && \
+	export SERVER=$$(cat azure-output.json | yq r - 'registry.value.server') && \
+	export URL=$$(cat azure-output.json | yq r - 'registry.value.url') && \
+	export PASSWORD=$$(cat azure-output.json | yq r - 'registry.value.password') && \
+	export USERNAME=$$(cat azure-output.json | yq r - 'registry.value.username') && \
 	envsubst < ./manifests/kots-config-azure-registry.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 storage-config-azure:
-	export PASSWORD=$$(cat azure-output.json | yq r - 'account_name') && \
-	export USERNAME=$$(cat azure-output.json | yq r - 'account_key') && \
-	export REGION=$$(cat azure-output.json | yq r - 'storage_region') && \
+	export PASSWORD=$$(cat azure-output.json | yq r - 'storage.value.account_name') && \
+	export USERNAME=$$(cat azure-output.json | yq r - 'storage.value.account_key') && \
+	export REGION=$$(cat azure-output.json | yq r - 'storage.value.storage_region') && \
 	envsubst < ./manifests/kots-config-azure-storage.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
@@ -224,11 +223,14 @@ s3-registry-backend-config-aws: # this registry config involves using s3 backend
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 registry-config-aws:
-	export SERVER=$$(cat aws-output.json | yq r - 'server' | cut -d / -f 1) && \
-	export PASSWORD=$$(cat aws-output.json | yq r - 'password') && \
-	export USERNAME=$$(cat aws-output.json | yq r - 'username') && \
-	envsubst < ./manifests/kots-config-aws-registry.yaml > tmp_2_config.yml
-	yq m -i tmp_config.yml tmp_2_config.yml
+	@echo "we don't support it just yet"
+
+
+# export SERVER=$$(cat aws-output.json | yq r - 'storage.value.server' | cut -d / -f 1) && \
+# export PASSWORD=$$(cat aws-output.json | yq r - 'storage.value.password') && \
+# export USERNAME=$$(cat aws-output.json | yq r - 'storage.value.username') && \
+# envsubst < ./manifests/kots-config-aws-registry.yaml > tmp_2_config.yml
+# yq m -i tmp_config.yml tmp_2_config.yml
 
 storage-config-incluster:
 	@echo "Nothing to do"
@@ -270,7 +272,7 @@ version ?= -
 kots-install: version-flag = $(if $(version:-=),--app-version-label=$(version),)
 kots-install: preflight-flag = $(if $(preflights:true=),--skip-preflights,)
 kots-install: license-file = $(if $(license_community_$(channel)),$(license_community_$(channel)),"../licenses/$(channel).yaml")
-kots-install: install-kots-cli
+kots-install: install-kots-cli get-kubeconfig
 	kubectl kots remove ${app} -n gitpod --force --kubeconfig=${KUBECONFIG} || echo "No kots app existing, Installing"
 	kubectl kots install ${app}/${channel} \
 	--skip-rbac-check ${version-flag} ${preflight-flag} \
