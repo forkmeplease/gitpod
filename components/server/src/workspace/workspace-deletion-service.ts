@@ -47,6 +47,17 @@ export class WorkspaceDeletionService {
     }
 
     /**
+     * This *hard deletes* the workspace entry and all corresponding workspace-instances, by triggering a db-sync mechanism that purges it from the DB.
+     * Note: when this function returns that doesn't mean that the entries are actually gone yet, that might still take a short while until db-sync comes
+     *       around to deleting them.
+     * @param ctx
+     * @param workspaceId
+     */
+    public async hardDeleteWorkspace(ctx: TraceContext, workspaceId: string): Promise<void> {
+        await this.db.trace(ctx).hardDeleteWorkspace(workspaceId);
+    }
+
+    /**
      * This method garbageCollects a workspace. It deletes its contents and sets the workspaces 'contentDeletedTime'
      * @param ctx
      * @param ws

@@ -3919,6 +3919,7 @@ data:
       "workspaceGarbageCollection": {
         "disabled": false,
         "startDate": 0,
+        "intervalSeconds": 1800,
         "chunkLimit": 1000,
         "minAgeDays": 14,
         "minAgePrebuildDays": 7,
@@ -7813,7 +7814,7 @@ spec:
   template:
     metadata:
       annotations:
-        gitpod.io/checksum_config: 0cdf98514f9d4602d3df86390d956b068545bc7df349ef99ee7dd1df8107dc44
+        gitpod.io/checksum_config: 30e250c84c2b6813c5fb5c8b084421f44c5b6b62cd58bb91dc9d80cdef3e6621
       creationTimestamp: null
       labels:
         app: gitpod

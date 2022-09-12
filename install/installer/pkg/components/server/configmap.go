@@ -185,12 +185,13 @@ func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 		DefinitelyGpDisabled: ctx.Config.DisableDefinitelyGP,
 		GitHubApp:            githubApp,
 		WorkspaceGarbageCollection: WorkspaceGarbageCollection{
-			ChunkLimit:                 1000,
-			ContentChunkLimit:          1000,
-			ContentRetentionPeriodDays: 21,
 			Disabled:                   disableWsGarbageCollection,
+			IntervalSeconds:            1800,
 			MinAgeDays:                 14,
 			MinAgePrebuildDays:         7,
+			ChunkLimit:                 1000,
+			ContentRetentionPeriodDays: 21,
+			ContentChunkLimit:          1000,
 		},
 		EnableLocalApp: enableLocalApp,
 		AuthProviderConfigFiles: func() []string {

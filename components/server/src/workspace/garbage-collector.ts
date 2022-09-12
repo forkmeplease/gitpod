@@ -34,7 +34,10 @@ export class WorkspaceGarbageCollector {
                 dispose: () => {},
             };
         }
-        return repeat(async () => this.garbageCollectWorkspacesIfLeader(), 30 * 60 * 1000);
+        return repeat(
+            async () => this.garbageCollectWorkspacesIfLeader(),
+            this.config.workspaceGarbageCollection.intervalSeconds * 1000,
+        );
     }
 
     public async garbageCollectWorkspacesIfLeader() {
@@ -128,7 +131,7 @@ export class WorkspaceGarbageCollector {
         }
     }
 
-    // finds volume snapshots that have been superceded by newer volume snapshot and removes them
+    // finds volume snapshots that have been superseded by newer volume snapshot and removes them
     protected async deleteOutdatedVolumeSnapshots() {
         const span = opentracing.globalTracer().startSpan("deleteOutdatedVolumeSnapshots");
         try {

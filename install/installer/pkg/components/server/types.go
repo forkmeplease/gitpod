@@ -91,6 +91,7 @@ type IncrementalPrebuilds struct {
 type WorkspaceGarbageCollection struct {
 	Disabled                   bool  `json:"disabled"`
 	StartDate                  int32 `json:"startDate"`
+	IntervalSeconds            int32 `json:"intervalSeconds"`
 	ChunkLimit                 int32 `json:"chunkLimit"`
 	MinAgeDays                 int32 `json:"minAgeDays"`
 	MinAgePrebuildDays         int32 `json:"minAgePrebuildDays"`
