@@ -96,6 +96,7 @@ func NewFromRequest(ctx context.Context, loc string, rs storage.DirectDownloader
 	if _, ok := spec.(*csapi.WorkspaceInitializer_Empty); ok {
 		initializer = &EmptyInitializer{}
 	} else if ir, ok := spec.(*csapi.WorkspaceInitializer_Composite); ok {
+		log.Info("WorkspaceInitializer_Composite")
 		initializers := make([]Initializer, len(ir.Composite.Initializer))
 		for i, init := range ir.Composite.Initializer {
 			initializers[i], err = NewFromRequest(ctx, loc, rs, init, opts)
@@ -105,17 +106,20 @@ func NewFromRequest(ctx context.Context, loc string, rs storage.DirectDownloader
 		}
 		initializer = CompositeInitializer(initializers)
 	} else if ir, ok := spec.(*csapi.WorkspaceInitializer_Git); ok {
+		log.Info("WorkspaceInitializer_Git")
 		if ir.Git == nil {
 			return nil, status.Error(codes.InvalidArgument, "missing Git initializer spec")
 		}
 
 		initializer, err = newGitInitializer(ctx, loc, ir.Git, opts.ForceGitpodUserForGit)
 	} else if ir, ok := spec.(*csapi.WorkspaceInitializer_Prebuild); ok {
+		log.Info("WorkspaceInitializer_Prebuilds")
 		if ir.Prebuild == nil {
 			return nil, status.Error(codes.InvalidArgument, "missing prebuild initializer spec")
 		}
 		var snapshot *SnapshotInitializer
 		if ir.Prebuild.Prebuild != nil {
+			log.Info("ir.Prebuild.Prebuild")
 			snapshot, err = newSnapshotInitializer(loc, rs, ir.Prebuild.Prebuild)
 			if err != nil {
 				return nil, status.Error(codes.Internal, fmt.Sprintf("cannot setup prebuild init: %v", err))
@@ -123,6 +127,7 @@ func NewFromRequest(ctx context.Context, loc string, rs storage.DirectDownloader
 		}
 		var gits []*GitInitializer
 		for _, gi := range ir.Prebuild.Git {
+			log.Infof("ir.Prebuild.Git: %t", opts.ForceGitpodUserForGit)
 			gitinit, err := newGitInitializer(ctx, loc, gi, opts.ForceGitpodUserForGit)
 			if err != nil {
 				return nil, err
@@ -134,12 +139,16 @@ func NewFromRequest(ctx context.Context, loc string, rs storage.DirectDownloader
 			Git:      gits,
 		}
 	} else if ir, ok := spec.(*csapi.WorkspaceInitializer_Snapshot); ok {
+		log.Info("WorkspaceInitializer_Snapshot")
 		initializer, err = newSnapshotInitializer(loc, rs, ir.Snapshot)
 	} else if ir, ok := spec.(*csapi.WorkspaceInitializer_Download); ok {
+		log.Info("WorkspaceInitializer_Download")
 		initializer, err = newFileDownloadInitializer(loc, ir.Download)
 	} else if ir, ok := spec.(*csapi.WorkspaceInitializer_Backup); ok {
+		log.Info("WorkspaceInitializer_Backup")
 		initializer, err = newFromBackupInitializer(loc, rs, ir.Backup)
 	} else {
+		log.Info("WorkspaceInitializer_Empty")
 		initializer = &EmptyInitializer{}
 	}
 	if err != nil {
