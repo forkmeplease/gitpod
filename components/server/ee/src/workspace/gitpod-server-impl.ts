@@ -2186,7 +2186,7 @@ export class GitpodServerEEImpl extends GitpodServerImpl {
             });
 
             console.log("notifyOnSubscriptionUpdate");
-            this.messageBus.notifyOnSubscriptionUpdate(ctx, attributionId).catch();
+            this.messageBus.notifyOnSubscriptionUpdate(ctx, attrId).catch();
         } catch (error) {
             log.error(`Failed to subscribe '${attributionId}' to Stripe`, error);
             throw new ResponseError(
