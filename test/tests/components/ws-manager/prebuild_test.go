@@ -130,3 +130,95 @@ func TestPrebuildWorkspaceTaskFail(t *testing.T) {
 
 	testEnv.Test(t, f)
 }
+
+func TestOpenWorkspaceFromPrebuild(t *testing.T) {
+	f := features.New("prebuild").
+		WithLabel("component", "ws-manager").
+		Assess("it should open workspace from prebuild successfully", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+
+			api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
+			t.Cleanup(func() {
+				api.Done(t)
+			})
+
+			tests := []struct {
+				Name string
+				FF   []wsmanapi.WorkspaceFeatureFlag
+			}{
+				{Name: "classic"},
+				// {Name: "pvc", FF: []wsmanapi.WorkspaceFeatureFlag{wsmanapi.WorkspaceFeatureFlag_PERSISTENT_VOLUME_CLAIM}},
+			}
+			for _, test := range tests {
+				t.Run(test.Name, func(t *testing.T) {
+					// create a prebuild
+					_, prebuildStopWs, err := integration.LaunchWorkspaceDirectly(ctx, api, integration.WithRequestModifier(func(req *wsmanapi.StartWorkspaceRequest) error {
+						req.Type = wsmanapi.WorkspaceType_PREBUILD
+						req.Spec.Envvars = append(req.Spec.Envvars, &wsmanapi.EnvironmentVariable{
+							Name:  "GITPOD_TASKS",
+							Value: `[{ "init": "echo \"some output\" > someFile; sleep 5; exit 0;" }]`,
+						})
+						req.Spec.FeatureFlags = test.FF
+						req.Spec.Initializer = &csapi.WorkspaceInitializer{
+							Spec: &csapi.WorkspaceInitializer_Git{
+								Git: &csapi.GitInitializer{
+									RemoteUri:        "https://github.com/gitpod-io/empty.git",
+									TargetMode:       csapi.CloneTargetMode_REMOTE_BRANCH,
+									CloneTaget:       "main",
+									CheckoutLocation: "empty",
+									Config:           &csapi.GitConfig{},
+								},
+							},
+						}
+						req.Spec.WorkspaceLocation = "empty"
+						return nil
+					}))
+					if err != nil {
+						t.Fatalf("cannot launch a workspace: %q", err)
+					}
+
+					prebuildLastStatus, err := prebuildStopWs(true)
+					if err != nil {
+						t.Errorf("cannot stop workspace: %q", err)
+					}
+					if prebuildLastStatus == nil || prebuildLastStatus.Conditions == nil {
+						t.Fatal("cannot find the prebuild snapshot")
+					}
+					prebuildSnapshot := prebuildLastStatus.Conditions.Snapshot
+
+					// launch the workspace from prebuild
+					_, _, err = integration.LaunchWorkspaceDirectly(ctx, api, integration.WithRequestModifier(func(req *wsmanapi.StartWorkspaceRequest) error {
+						req.Spec.FeatureFlags = test.FF
+						req.Spec.Initializer = &csapi.WorkspaceInitializer{
+							Spec: &csapi.WorkspaceInitializer_Prebuild{
+								Prebuild: &csapi.PrebuildInitializer{
+									Prebuild: &csapi.SnapshotInitializer{Snapshot: prebuildSnapshot},
+									Git: []*csapi.GitInitializer{
+										{
+											RemoteUri:        "https://github.com/gitpod-io/empty.git",
+											TargetMode:       csapi.CloneTargetMode_REMOTE_BRANCH,
+											CloneTaget:       "main",
+											CheckoutLocation: "empty",
+											Config:           &csapi.GitConfig{},
+										},
+									},
+								},
+							},
+						}
+						req.Spec.WorkspaceLocation = "empty"
+						return nil
+					}))
+					if err != nil {
+						t.Fatalf("cannot launch a workspace: %q", err)
+					}
+
+					// _, _ = stopWs(true)
+				})
+			}
+			return ctx
+		}).
+		Feature()
+
+	testEnv.Test(t, f)
+}
