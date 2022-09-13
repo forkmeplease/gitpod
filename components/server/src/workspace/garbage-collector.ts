@@ -47,6 +47,9 @@ export class WorkspaceGarbageCollector {
             this.deleteWorkspaceContentAfterRetentionPeriod().catch((err) =>
                 log.error("wsgc: error during content deletion", err),
             );
+            this.purgeWorkspacesAfterPurgeRetentionPeriod().catch((err) =>
+                log.error("wsgc: error during hard deletion of workspaces", err),
+            );
             this.deleteOldPrebuilds().catch((err) => log.error("wsgc: error during prebuild deletion", err));
             this.deleteOutdatedVolumeSnapshots().catch((err) =>
                 log.error("wsgc: error during volume snapshot gc deletion", err),
@@ -99,6 +102,34 @@ export class WorkspaceGarbageCollector {
             );
 
             log.info(`wsgc: successfully deleted the content of ${deletes.length} workspaces`);
+            span.addTags({ nrOfCollectedWorkspaces: deletes.length });
+        } catch (err) {
+            TraceContext.setError({ span }, err);
+            throw err;
+        } finally {
+            span.finish();
+        }
+    }
+
+    /**
+     * This method is meant to purge all traces of a Workspace and it's WorkspaceInstances from the DB
+     */
+    protected async purgeWorkspacesAfterPurgeRetentionPeriod() {
+        const span = opentracing.globalTracer().startSpan("purgeWorkspacesAfterPurgeRetentionPeriod");
+        try {
+            const now = new Date();
+            const workspaces = await this.workspaceDB
+                .trace({ span })
+                .findWorkspacesForPurging(
+                    this.config.workspaceGarbageCollection.purgeRetentionPeriodDays,
+                    this.config.workspaceGarbageCollection.purgeChunkLimit,
+                    now,
+                );
+            const deletes = await Promise.all(
+                workspaces.map((ws) => this.deletionService.hardDeleteWorkspace({ span }, ws.id)),
+            );
+
+            log.info(`wsgc: successfully purged ${deletes.length} workspaces`);
             span.addTags({ nrOfCollectedWorkspaces: deletes.length });
         } catch (err) {
             TraceContext.setError({ span }, err);

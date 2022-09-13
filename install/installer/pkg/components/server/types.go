@@ -97,6 +97,8 @@ type WorkspaceGarbageCollection struct {
 	MinAgePrebuildDays         int32 `json:"minAgePrebuildDays"`
 	ContentRetentionPeriodDays int32 `json:"contentRetentionPeriodDays"`
 	ContentChunkLimit          int32 `json:"contentChunkLimit"`
+	PurgeRetentionPeriodDays   int32 `json:"purgeRetentionPeriodDays"`
+	PurgeChunkLimit            int32 `json:"purgeChunkLimit"`
 }
 
 type GitHubApp struct {

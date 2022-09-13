@@ -61,6 +61,12 @@ export interface WorkspaceGarbageCollection {
 
     /** The maximum amount of workspaces whose content is deleted in one go */
     contentChunkLimit: number;
+
+    /** The minimal number of days a workspace has to stay in 'contentDeleted' before it's purged from the DB */
+    purgeRetentionPeriodDays: number;
+
+    /** The maximum amount of workspaces which are purged in one go */
+    purgeChunkLimit: number;
 }
 
 /**
