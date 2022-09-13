@@ -115,6 +115,7 @@ import { BillingModes } from "../billing/billing-mode";
 import { getExperimentsClientForBackend } from "@gitpod/gitpod-protocol/lib/experiments/configcat-server";
 import { BillingService } from "../billing/billing-service";
 import Stripe from "stripe";
+import { MessageBusIntegration } from "../../../src/workspace/messagebus-integration";
 
 @injectable()
 export class GitpodServerEEImpl extends GitpodServerImpl {
@@ -162,6 +163,8 @@ export class GitpodServerEEImpl extends GitpodServerImpl {
     @inject(BillingModes) protected readonly billingModes: BillingModes;
     @inject(BillingService) protected readonly billingService: BillingService;
 
+    @inject(MessageBusIntegration) protected readonly messageBus: MessageBusIntegration;
+
     initialize(
         client: GitpodClient | undefined,
         user: User | undefined,
@@ -174,6 +177,7 @@ export class GitpodServerEEImpl extends GitpodServerImpl {
 
         this.listenToCreditAlerts();
         this.listenForPrebuildUpdates().catch((err) => log.error("error registering for prebuild updates", err));
+        this.listenForSubscriptionUpdates().catch((err) => log.error("error registering for prebuild updates", err));
     }
 
     protected async listenForPrebuildUpdates() {
@@ -199,6 +203,32 @@ export class GitpodServerEEImpl extends GitpodServerImpl {
         }
 
         // TODO(at) we need to keep the list of accessible project up to date
+    }
+
+    protected async listenForSubscriptionUpdates() {
+        if (!this.user) {
+            return;
+        }
+        const teamIds = (await this.teamDB.findTeamsByUser(this.user.id)).map(({ id }) =>
+            AttributionId.render({ kind: "team", teamId: id }),
+        );
+        for (const attributionId of [AttributionId.render({ kind: "user", userId: this.user.id }), ...teamIds]) {
+            this.disposables.push(
+                this.localMessageBroker.listenForSubscriptionUpdates(
+                    attributionId,
+                    (ctx: TraceContext, attributionId: AttributionId) =>
+                        TraceContext.withSpan(
+                            "forwardSubscriptionUpdateToClient",
+                            (ctx) => {
+                                traceClientMetadata(ctx, this.clientMetadata);
+                                TraceContext.setJsonRPCMetadata(ctx, "onSubscriptionUpdate");
+                                this.client?.onSubscriptionUpdate(AttributionId.render(attributionId));
+                            },
+                            ctx,
+                        ),
+                ),
+            );
+        }
     }
 
     protected async getAccessibleProjects() {
@@ -2154,6 +2184,9 @@ export class GitpodServerEEImpl extends GitpodServerImpl {
                 spendingLimit: this.defaultSpendingLimit,
                 billingStrategy: "stripe",
             });
+
+            console.log("notifyOnSubscriptionUpdate");
+            this.messageBus.notifyOnSubscriptionUpdate(ctx, attributionId).catch();
         } catch (error) {
             log.error(`Failed to subscribe '${attributionId}' to Stripe`, error);
             throw new ResponseError(
@@ -2241,6 +2274,9 @@ export class GitpodServerEEImpl extends GitpodServerImpl {
             spendingLimit: usageLimit,
             billingStrategy: costCenter?.billingStrategy || "other",
         });
+
+        console.log("notifyOnSubscriptionUpdate");
+        this.messageBus.notifyOnSubscriptionUpdate(ctx, attributionId).catch();
     }
 
     async getNotifications(ctx: TraceContext): Promise<string[]> {
