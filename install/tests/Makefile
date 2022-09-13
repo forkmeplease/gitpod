@@ -155,20 +155,6 @@ external-dns: check-env-cloud select-workspace
 	@echo "Done creating externaldns for $(cloud)"
 
 .PHONY:
-## generate-self-signed-certs: Generate certs and creates a secret for the given domain
-generate-self-signed-certs: check-env-cloud select-workspace
-	# install in local store
-	mkcert -install
-	FN_CACERT="./ca.pem"
-	FN_SSLCERT="./ssl.crt"
-	FN_SSLKEY="./ssl.key"
-
-	cat "${HOME}"/.local/share/mkcert/rootCA.pem > "$FN_CACERT"
-	mkcert -cert-file "$FN_SSLCERT" \
-	  -key-file "$FN_SSLKEY" \
-	  "*.ws.${TF_VAR_TEST_ID}.${DOMAIN}" "*.${TF_VAR_TEST_ID}.${DOMAIN}" "${TF_VAR_TEST_ID}.${DOMAIN}"
-
-	@echo "Done creating self signed certificates for $(cloud)"
 
 .PHONY:
 ## get-kubeconfig: Returns KUBECONFIG of a just created cluster
@@ -269,6 +255,17 @@ registry-config-aws:
 	yq m -i tmp_config.yml tmp_2_config.yml
 
 self-signed-config:
+	# install in local store
+	mkcert -install
+	FN_CACERT="./ca.pem"
+	FN_SSLCERT="./ssl.crt"
+	FN_SSLKEY="./ssl.key"
+
+	cat "${HOME}"/.local/share/mkcert/rootCA.pem > "$FN_CACERT"
+	mkcert -cert-file "$FN_SSLCERT" \
+	  -key-file "$FN_SSLKEY" \
+	  "*.ws.${TF_VAR_TEST_ID}.${DOMAIN}" "*.${TF_VAR_TEST_ID}.${DOMAIN}" "${TF_VAR_TEST_ID}.${DOMAIN}"
+
 	envsubst < ./manifests/kots-config-self-signed.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
@@ -297,7 +294,7 @@ generate-kots-config: select-workspace check-env-cloud get-base-config
 	$(MAKE) storage-config-${cloud_storage}
 	$(MAKE) db-config-${cloud_db}
 	$(MAKE) registry-config-${cloud_registry}
-	ifeq ($(selfSigned), true)
+	ifeq ($(cloud), true)
 		$(MAKE) self-signed-config
 	endif
 

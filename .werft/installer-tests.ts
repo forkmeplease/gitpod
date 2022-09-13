@@ -38,8 +38,6 @@ interface InfraConfig {
     makeTarget: string;
     description: string;
     slackhook?: string;
-    // if enabled is not null, Phase is executed only when enabled() returns true
-    enabled?: () => boolean;
 }
 
 interface TestConfig {
@@ -172,18 +170,6 @@ const INFRA_PHASES: { [name: string]: InfraConfig } = {
         makeTarget: "external-dns",
         description: `Deploys external-dns with ${cloud} provider`,
     },
-    GENERATE_SELF_SIGNED_CERTIFICATES: {
-        phase: "generate-self-signed-certs",
-        makeTarget: "generate-self-signed-certs",
-        description: `Generates and stores the self signed certificate into \`https-certificates\``,
-        enabled: function () {
-            if (selfSigned === "true") {
-                return true;
-            } else {
-                return false;
-            }
-        },
-    },
     ADD_NS_RECORD: {
         phase: "add-ns-record",
         makeTarget: "add-ns-record",
@@ -295,12 +281,6 @@ export async function installerTests(config: TestConfig) {
     werft.phase(majorPhase, `Manage the infrastructure in ${cloud}`);
     for (let phase of config.PHASES) {
         const phaseSteps = INFRA_PHASES[phase];
-        if (phaseSteps.enabled !== null) {
-            // check if the phase is enabled.
-            if (phaseSteps.enabled() === false) {
-                continue;
-            }
-        }
         const ret = callMakeTargets(phaseSteps.phase, phaseSteps.description, phaseSteps.makeTarget);
         if (ret) {
             // there is not point in continuing if one stage fails for infra setup
@@ -407,7 +387,7 @@ function callMakeTargets(phase: string, description: string, makeTarget: string,
 
     // exporting cloud env var is important for the make targets
     const response = exec(
-        `export TF_VAR_cluster_version=${k8s_version} cloud=${cloud} && make -C ${makefilePath} ${makeTarget}`,
+        `export TF_VAR_cluster_version=${k8s_version} cloud=${cloud} self_signed=${selfSigned} && make -C ${makefilePath} ${makeTarget}`,
         {
             slice: phase,
             dontCheckRc: true,
