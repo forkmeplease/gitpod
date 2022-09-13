@@ -1,0 +1,13 @@
+apiVersion: kots.io/v1beta1
+kind: ConfigValues
+spec:
+  values:
+      tls_crt:
+        fileName: "${FN_SSLCERT}"
+        data: "tls_crt"
+      tls_key:
+        fileName: "${FN_SSLKEY}"
+        data: "tls_key"
+      tls_ca_crt:
+        fileName: "${FN_CACERT}"
+        data: "tls_ca_crt"
