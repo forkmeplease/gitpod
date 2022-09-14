@@ -5,9 +5,11 @@ import { JobConfig } from "./job-config";
 export async function validateChanges(werft: Werft, config: JobConfig) {
     werft.phase("validate-changes", "validating changes");
     try {
-        branchNameCheck(werft, config);
-        preCommitCheck(werft);
-        typecheckWerftJobs(werft);
+        await Promise.all([
+            branchNameCheck(werft, config),
+            preCommitCheck(werft),
+            typecheckWerftJobs(werft)
+        ])
     } catch (err) {
         werft.fail("validate-changes", err);
     }
