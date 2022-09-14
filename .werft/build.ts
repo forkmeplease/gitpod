@@ -61,7 +61,7 @@ async function run(context: any) {
 
     if (config.withSelfHostedPreview) {
         await triggerSelfHostedPreview(werft, config, context.Owner);
-        return
+        return;
     }
 
     if (!config.withPreview || config.publishRelease) {
