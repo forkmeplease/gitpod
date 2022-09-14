@@ -345,8 +345,8 @@ check-kots-app:
 	kubectl kots get --kubeconfig=${KUBECONFIG} app gitpod -n gitpod | grep gitpod  | awk '{print $$2}' | grep "ready" || { $(MAKE) gitpod-debug-info; exit 1; }
 
 check-gitpod-installation: delete-cm-setup check-kots-app check-env-sub-domain
-	@echo "Curling http://${TF_VAR_TEST_ID}.${DOMAIN}/api/version"
-	curl -i -X GET http://${TF_VAR_TEST_ID}.${DOMAIN}/api/version || { echo "Curling Gitpod endpoint failed"; exit 1; }
+	@echo "Curling https://${TF_VAR_TEST_ID}.${DOMAIN}/api/version"
+	curl -i -X GET https://${TF_VAR_TEST_ID}.${DOMAIN}/api/version || { echo "Curling Gitpod endpoint failed"; exit 1; }
 
 define runtests
 	./tests.sh ${KUBECONFIG} $(1)
