@@ -19,6 +19,11 @@ ifndef cloud
 	$(error cloud is not defined)
 endif
 
+check-self-signed:
+ifndef self_signed
+	$(error self-signed is not defined)
+endif
+
 check-env-cluster-version:
 ifndef TF_VAR_cluster_version
 	$(error TF_VAR_cluster_version is not defined)
@@ -155,8 +160,6 @@ external-dns: check-env-cloud select-workspace
 	@echo "Done creating externaldns for $(cloud)"
 
 .PHONY:
-
-.PHONY:
 ## get-kubeconfig: Returns KUBECONFIG of a just created cluster
 get-kubeconfig: ${cloud}-kubeconfig
 
@@ -290,11 +293,11 @@ generate-kots-config: cloud_storage = $(if $(findstring external,$(storage)),$(c
 generate-kots-config: cloud_registry = $(if $(findstring external,$(registry)),$(cloud),incluster)
 generate-kots-config: cloud_db = $(if $(findstring external,$(db)),$(cloud),incluster)
 ## generate-kots-config: Generate the kots config based on test config
-generate-kots-config: select-workspace check-env-cloud get-base-config
+generate-kots-config: select-workspace check-env-cloud get-base-config check-self-signed
 	$(MAKE) storage-config-${cloud_storage}
 	$(MAKE) db-config-${cloud_db}
 	$(MAKE) registry-config-${cloud_registry}
-	ifeq ($(cloud), true)
+	ifeq ($(self_signed), true)
 		$(MAKE) self-signed-config
 	endif
 
