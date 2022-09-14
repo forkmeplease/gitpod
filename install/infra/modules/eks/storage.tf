@@ -32,8 +32,15 @@ data "aws_iam_policy_document" "s3_policy" {
       "s3:AbortMultipartUpload"
     ]
     resources = [
-      "arn:aws:s3:::${aws_s3_bucket.gitpod-storage[count.index].id}",
+      "${aws_s3_bucket.gitpod-storage[count.index].arn}/*",
     ]
+    effect    = "Allow"
+  }
+    statement {
+    actions   = ["s3:ListBucket",
+                "s3:GetBucketLocation",
+                "s3:ListBucketMultipartUploads"]
+    resources = [aws_s3_bucket.gitpod-storage[count.index].arn]
     effect    = "Allow"
   }
 }
@@ -98,8 +105,15 @@ data "aws_iam_policy_document" "s3_policy_registry" {
       "s3:AbortMultipartUpload"
     ]
     resources = [
-      "arn:aws:s3:::${aws_s3_bucket.gitpod-registry-backend[count.index].id}",
+      "${aws_s3_bucket.gitpod-registry-backend[count.index].arn}/*",
     ]
+    effect    = "Allow"
+  }
+  statement {
+    actions   = ["s3:ListBucket",
+                "s3:GetBucketLocation",
+                "s3:ListBucketMultipartUploads"]
+    resources = [aws_s3_bucket.gitpod-registry-backend[count.index].arn]
     effect    = "Allow"
   }
 }
