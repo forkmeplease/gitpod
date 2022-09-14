@@ -38,7 +38,7 @@ async function branchNameCheck(werft: Werft, config: JobConfig) {
 
 async function preCommitCheck(werft: Werft) {
     werft.log("pre-commit checks", "Running pre-commit hooks.");
-    const preCommitCmd = exec(`pre-commit run --show-diff-on-failure`, { slice: "pre-commit checks" });
+    const preCommitCmd = await exec(`pre-commit run --show-diff-on-failure`, { slice: "pre-commit checks", async: true });
 
     if (preCommitCmd.code != 0) {
         throw new Error(preCommitCmd.stderr.toString().trim());
@@ -54,7 +54,7 @@ async function preCommitCheck(werft: Werft) {
     const slice = "tsc --noEmit";
     try {
         werft.log(slice, "Typechecking Werft Typescript files");
-        exec("cd .werft && tsc --noEmit", { slice });
+        await exec("cd .werft && tsc --noEmit", { slice, async: true });
         werft.log(slice, "No compilation errors");
     } catch (e) {
         werft.fail(slice, e);
