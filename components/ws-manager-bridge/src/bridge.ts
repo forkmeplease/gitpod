@@ -601,10 +601,16 @@ export class WorkspaceManagerBridge implements Disposable {
 
     protected async markWorkspaceInstanceAsStopped(ctx: TraceContext, info: RunningWorkspaceInfo, now: Date) {
         const nowISO = now.toISOString();
-        info.latestInstance.stoppingTime = nowISO;
+        if (!info.latestInstance.stoppingTime) {
+            info.latestInstance.stoppingTime = nowISO;
+        }
         info.latestInstance.stoppedTime = nowISO;
         info.latestInstance.status.phase = "stopped";
         await this.workspaceDB.trace(ctx).storeInstance(info.latestInstance);
+
+        // cleanup
+        // important: call this after the DB update
+        await this.onInstanceStopped(ctx, info.workspace.ownerId, info.latestInstance);
 
         await this.messagebus.notifyOnInstanceUpdate(ctx, info.workspace.ownerId, info.latestInstance);
         await this.prebuildUpdater.stopPrebuildInstance(ctx, info.latestInstance);
