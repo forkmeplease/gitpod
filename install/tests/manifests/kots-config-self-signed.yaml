@@ -2,12 +2,15 @@ apiVersion: kots.io/v1beta1
 kind: ConfigValues
 spec:
   values:
+      cert_manager_enabled:
+        value: "0"
+        data: "cert_manager_enabled"
       tls_crt:
-        fileName: "${FN_SSLCERT}"
+        value: ${SSL_CERT}
         data: "tls_crt"
       tls_key:
-        fileName: "${FN_SSLKEY}"
+        value: ${SSL_KEY}
         data: "tls_key"
       tls_ca_crt:
-        fileName: "${FN_CACERT}"
+        value: ${CA_CERT}
         data: "tls_ca_crt"

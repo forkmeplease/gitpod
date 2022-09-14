@@ -382,8 +382,14 @@ function callMakeTargets(phase: string, description: string, makeTarget: string,
     werft.log(phase, `Calling ${makeTarget}`);
 
     // exporting cloud env var is important for the make targets
+    const env = `export TF_VAR_cluster_version=${k8s_version} cloud=${cloud}`
+    // export self_signed only if set
+    if (selfSigned === "true") {
+        env.concat(` self_signed=${selfSigned}`)
+    }
+
     const response = exec(
-        `export TF_VAR_cluster_version=${k8s_version} cloud=${cloud} self_signed=${selfSigned} && make -C ${makefilePath} ${makeTarget}`,
+        `${env} && make -C ${makefilePath} ${makeTarget}`,
         {
             slice: phase,
             dontCheckRc: true,

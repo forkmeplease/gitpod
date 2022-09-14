@@ -19,11 +19,6 @@ ifndef cloud
 	$(error cloud is not defined)
 endif
 
-check-self-signed:
-ifndef self_signed
-	$(error self-signed is not defined)
-endif
-
 check-env-cluster-version:
 ifndef TF_VAR_cluster_version
 	$(error TF_VAR_cluster_version is not defined)
@@ -116,10 +111,14 @@ add-ns-record: check-env-cloud
 .PHONY:
 ## cluster-issuer: Creates a cluster issuer for the correspondign provider
 cluster-issuer: check-env-cloud
+ifndef self_signed
+	@echo "Skipped creating cluster issuer"
+else
 	terraform init --upgrade && \
 	terraform workspace new $(TF_VAR_TEST_ID) || terraform workspace select $(TF_VAR_TEST_ID) && \
 	terraform apply -target=module.$(cloud)-issuer  -var kubeconfig=${KUBECONFIG} --auto-approve
 	@echo "Done creating cluster issuer"
+endif
 
 image_id_1804 := "ubuntu-1804-bionic-v20220712"
 
@@ -260,15 +259,15 @@ registry-config-aws:
 self-signed-config:
 	# install in local store
 	mkcert -install
-	FN_CACERT="./ca.pem"
-	FN_SSLCERT="./ssl.crt"
-	FN_SSLKEY="./ssl.key"
 
-	cat "${HOME}"/.local/share/mkcert/rootCA.pem > "$FN_CACERT"
-	mkcert -cert-file "$FN_SSLCERT" \
-	  -key-file "$FN_SSLKEY" \
+	cat "${HOME}"/.local/share/mkcert/rootCA.pem > ./ca.pem
+	mkcert -cert-file "./ssl.crt" \
+	  -key-file "./ssl.key" \
 	  "*.ws.${TF_VAR_TEST_ID}.${DOMAIN}" "*.${TF_VAR_TEST_ID}.${DOMAIN}" "${TF_VAR_TEST_ID}.${DOMAIN}"
 
+	export CA_CERT=$$(cat ./ca.pem | base64 -w 0) && \
+	export SSL_CERT=$$(cat ./ssl.crt | base64 -w 0) && \
+	export SSL_KEY=$$(cat ./ssl.key | base64 -w 0) && \
 	envsubst < ./manifests/kots-config-self-signed.yaml > tmp_2_config.yml
 	yq m -i tmp_config.yml tmp_2_config.yml
 
@@ -293,13 +292,13 @@ generate-kots-config: cloud_storage = $(if $(findstring external,$(storage)),$(c
 generate-kots-config: cloud_registry = $(if $(findstring external,$(registry)),$(cloud),incluster)
 generate-kots-config: cloud_db = $(if $(findstring external,$(db)),$(cloud),incluster)
 ## generate-kots-config: Generate the kots config based on test config
-generate-kots-config: select-workspace check-env-cloud get-base-config check-self-signed
+generate-kots-config: select-workspace check-env-cloud get-base-config
 	$(MAKE) storage-config-${cloud_storage}
 	$(MAKE) db-config-${cloud_db}
 	$(MAKE) registry-config-${cloud_registry}
-	ifeq ($(self_signed), true)
-		$(MAKE) self-signed-config
-	endif
+ifndef self_signed
+	$(MAKE) self-signed-config
+endif
 
 license_community_beta := "../licenses/Community (Beta).yaml"
 license_community_stable := "../licenses/Community.yaml"
