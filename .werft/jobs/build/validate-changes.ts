@@ -49,7 +49,6 @@ async function preCommitCheck(werft: Werft) {
  * build if there are compile errors.
  */
  export async function typecheckWerftJobs(werft: Werft) {
-    werft.phase("Typecheck Typescript Werft files", "Typechecking Werft Typescript files");
     const slice = "tsc --noEmit";
     try {
         exec("cd .werft && tsc --noEmit", { slice });
