@@ -6,7 +6,7 @@
 
 import { serverUrl, workspaceUrl } from '../shared/urls';
 import { GitpodServiceClient } from './gitpod-service-client';
-const commit = require('../../config.json').commit
+const commit = require('../../config.json').commit;
 
 export enum MetricsName {
     SupervisorFrontendClientTotal = "gitpod_supervisor_frontend_client_total",
@@ -28,18 +28,16 @@ interface ReportErrorParam {
     component: string;
     version: string;
     properties?: Record<string, string>;
-    name: string;
-    message: string;
 }
 export class IDEMetricsServiceClient {
     static workspaceId? = workspaceUrl.workspaceId;
-    static gitpodServiceClient?: GitpodServiceClient
+    static gitpodServiceClient?: GitpodServiceClient;
 
     static get instanceId(): string {
-        return this.gitpodServiceClient?.info.latestInstance?.id ?? ""
+        return this.gitpodServiceClient?.info.latestInstance?.id ?? "";
     }
     static get userId(): string {
-        return this.gitpodServiceClient?.user.id ?? ""
+        return this.gitpodServiceClient?.user.id ?? "";
     }
 
     static async addCounter(metricsName: MetricsName, labels?: Record<string, string>, value?: number) : Promise<boolean> {
@@ -64,6 +62,10 @@ export class IDEMetricsServiceClient {
     }
 
     static async reportError(error: Error, properties?: Record<string, string>) : Promise<boolean> {
+        const p = Object.assign({}, properties)
+        p.error_name = error.name
+        p.error_message = error.message
+
         const url = `${MetricsUrl}/reportError`
         const params: ReportErrorParam = {
             errorStack: error.stack ?? String(error),
@@ -72,9 +74,7 @@ export class IDEMetricsServiceClient {
             workspaceId: this.workspaceId ?? "",
             instanceId: this.instanceId ?? "",
             userId: this.userId ?? "",
-            name: error.name,
-            message: error.message,
-            properties,
+            properties: p,
         }
         try {
             const response = await fetch(url, {
