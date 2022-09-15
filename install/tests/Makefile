@@ -346,6 +346,9 @@ check-kots-app:
 
 check-gitpod-installation: delete-cm-setup check-kots-app check-env-sub-domain
 	@echo "Curling https://${TF_VAR_TEST_ID}.${DOMAIN}/api/version"
+ifndef self_signed
+	export SSL_CERT_FILE=./ca.pem && \
+endif
 	curl -i -X GET https://${TF_VAR_TEST_ID}.${DOMAIN}/api/version || { echo "Curling Gitpod endpoint failed"; exit 1; }
 
 define runtests
