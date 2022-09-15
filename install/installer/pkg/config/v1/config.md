@@ -142,6 +142,7 @@ Additional config parameters that are in experimental state
 |`experimental.webapp.disableMigration`|bool|N|  ||
 |`experimental.webapp.usage.enabled`|bool|N|  ||
 |`experimental.webapp.usage.schedule`|string|N|  ||
+|`experimental.webapp.usage.defaultSpendingLimit`||N|  ||
 |`experimental.webapp.usage.creditsPerMinuteByWorkspaceClass`||N|  ||
 |`experimental.webapp.configcatKey`|string|N|  ||
 |`experimental.ide.resolveLatest`|bool|N|  |  Disable resolution of latest images and use bundled latest versions instead|

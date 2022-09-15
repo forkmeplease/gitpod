@@ -246,6 +246,7 @@ type UsageConfig struct {
 	Enabled                          bool               `json:"enabled"`
 	Schedule                         string             `json:"schedule"`
 	BillInstancesAfter               *time.Time         `json:"billInstancesAfter"`
+	DefaultSpendingLimit             map[string]int32   `json:"defaultSpendingLimit"`
 	CreditsPerMinuteByWorkspaceClass map[string]float64 `json:"creditsPerMinuteByWorkspaceClass"`
 }
 

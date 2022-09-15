@@ -6,7 +6,6 @@ package apiv1
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -25,9 +24,10 @@ import (
 var _ v1.UsageServiceServer = (*UsageService)(nil)
 
 type UsageService struct {
-	conn    *gorm.DB
-	nowFunc func() time.Time
-	pricer  *WorkspacePricer
+	conn              *gorm.DB
+	nowFunc           func() time.Time
+	pricer            *WorkspacePricer
+	costCenterManager *db.CostCenterManager
 
 	v1.UnimplementedUsageServiceServer
 }
@@ -151,39 +151,40 @@ func (s *UsageService) ListUsage(ctx context.Context, in *v1.ListUsageRequest) (
 }
 
 func (s *UsageService) GetCostCenter(ctx context.Context, in *v1.GetCostCenterRequest) (*v1.GetCostCenterResponse, error) {
-	var attributionIdReq string
-
 	if in.AttributionId == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "Empty attributionId")
 	}
-
-	attributionIdReq = in.AttributionId
-
-	attributionId, err := db.ParseAttributionID(attributionIdReq)
+	attributionId, err := db.ParseAttributionID(in.AttributionId)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "Failed to parse attribution ID: %s", err.Error())
+		return nil, status.Errorf(codes.InvalidArgument, "Bad attributionId %s", in.AttributionId)
 	}
 
-	result, err := db.GetCostCenter(ctx, s.conn, db.AttributionID(attributionIdReq))
+	result, err := s.costCenterManager.GetOrCreateCostCenter(ctx, attributionId)
 	if err != nil {
-		if errors.Is(err, db.CostCenterNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Cost center not found: %s", err.Error())
-		}
-		return nil, status.Errorf(codes.Internal, "Failed to get cost center %s from DB: %s", in.AttributionId, err.Error())
+		return nil, err
 	}
-
-	billingStrategy := v1.CostCenter_BILLING_STRATEGY_OTHER
-	if result.BillingStrategy == db.CostCenter_Stripe {
-		billingStrategy = v1.CostCenter_BILLING_STRATEGY_STRIPE
-	}
-
 	return &v1.GetCostCenterResponse{
 		CostCenter: &v1.CostCenter{
-			AttributionId:   string(attributionId),
+			AttributionId:   string(result.ID),
 			SpendingLimit:   result.SpendingLimit,
-			BillingStrategy: billingStrategy,
+			BillingStrategy: convertBillingStrategyToAPI(result.BillingStrategy),
+			NextBillingTime: timestamppb.New(result.NextBillingTime.Time()),
 		},
 	}, nil
+}
+
+func convertBillingStrategyToDB(in v1.CostCenter_BillingStrategy) db.BillingStrategy {
+	if in == v1.CostCenter_BILLING_STRATEGY_STRIPE {
+		return db.CostCenter_Stripe
+	}
+	return db.CostCenter_Other
+}
+
+func convertBillingStrategyToAPI(in db.BillingStrategy) v1.CostCenter_BillingStrategy {
+	if in == db.CostCenter_Stripe {
+		return v1.CostCenter_BILLING_STRATEGY_STRIPE
+	}
+	return v1.CostCenter_BILLING_STRATEGY_OTHER
 }
 
 func (s *UsageService) SetCostCenter(ctx context.Context, in *v1.SetCostCenterRequest) (*v1.SetCostCenterResponse, error) {
@@ -191,25 +192,20 @@ func (s *UsageService) SetCostCenter(ctx context.Context, in *v1.SetCostCenterRe
 		return nil, status.Errorf(codes.InvalidArgument, "Empty CostCenter")
 	}
 
-	attributionID, err := db.ParseAttributionID(in.CostCenter.AttributionId)
+	attrID, err := db.ParseAttributionID(in.CostCenter.AttributionId)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "Failed to parse attribution ID: %s", err.Error())
+		return nil, err
 	}
 
-	billingStrategy := db.CostCenter_Other
-	if in.CostCenter.BillingStrategy == v1.CostCenter_BILLING_STRATEGY_STRIPE {
-		billingStrategy = db.CostCenter_Stripe
-	}
-
-	_, err = db.SaveCostCenter(ctx, s.conn, &db.CostCenter{
-		ID:              attributionID,
+	costCenter := db.CostCenter{
+		ID:              attrID,
 		SpendingLimit:   in.CostCenter.SpendingLimit,
-		BillingStrategy: billingStrategy,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to save cost center %s: %s", attributionID, err.Error())
+		BillingStrategy: convertBillingStrategyToDB(in.CostCenter.BillingStrategy),
 	}
-
+	_, err = s.costCenterManager.UpdateCostCenter(ctx, costCenter)
+	if err != nil {
+		return nil, err
+	}
 	return &v1.SetCostCenterResponse{}, nil
 }
 
@@ -293,7 +289,7 @@ func reconcileUsage(instances []db.WorkspaceInstanceForUsage, drafts []db.Usage,
 
 	draftsByWorkspaceID := map[uuid.UUID]db.Usage{}
 	for _, draft := range drafts {
-		draftsByWorkspaceID[draft.WorkspaceInstanceID] = draft
+		draftsByWorkspaceID[*draft.WorkspaceInstanceID] = draft
 	}
 
 	for instanceID, instance := range instancesByID {
@@ -336,7 +332,7 @@ func newUsageFromInstance(instance db.WorkspaceInstanceForUsage, pricer *Workspa
 		CreditCents:         db.NewCreditCents(pricer.CreditsUsedByInstance(&instance, now)),
 		EffectiveTime:       db.NewVarcharTime(effectiveTime),
 		Kind:                db.WorkspaceInstanceUsageKind,
-		WorkspaceInstanceID: instance.ID,
+		WorkspaceInstanceID: &instance.ID,
 		Draft:               draft,
 	}
 
@@ -381,7 +377,7 @@ func updateUsageFromInstance(instance db.WorkspaceInstanceForUsage, usage db.Usa
 func collectWorkspaceInstanceIDs(usage []db.Usage) []uuid.UUID {
 	var ids []uuid.UUID
 	for _, u := range usage {
-		ids = append(ids, u.WorkspaceInstanceID)
+		ids = append(ids, *u.WorkspaceInstanceID)
 	}
 	return ids
 }
@@ -394,9 +390,10 @@ func dedupeWorkspaceInstancesForUsage(instances []db.WorkspaceInstanceForUsage) 
 	return set
 }
 
-func NewUsageService(conn *gorm.DB, pricer *WorkspacePricer) *UsageService {
+func NewUsageService(conn *gorm.DB, pricer *WorkspacePricer, costCenterManager *db.CostCenterManager) *UsageService {
 	return &UsageService{
-		conn: conn,
+		conn:              conn,
+		costCenterManager: costCenterManager,
 		nowFunc: func() time.Time {
 			return time.Now().UTC()
 		},
