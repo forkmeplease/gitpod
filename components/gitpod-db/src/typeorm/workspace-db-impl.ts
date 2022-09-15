@@ -1020,6 +1020,8 @@ export abstract class AbstractTypeORMWorkspaceDBImpl implements WorkspaceDB {
         const since = new Date();
         since.setDate(since.getDate() - 7);
 
+        return 3;
+
         // get the owners of workspaces with new instances created at-least
         // 3 days of the last 7 days
         return workspaceInstanceRepo
