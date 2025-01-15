@@ -8,7 +8,7 @@
 
 import { v1 } from "@authzed/authzed-node";
 
-const InstallationID = "1";
+export const InstallationID = "1";
 
 export type ResourceType =
     | UserResourceType
@@ -32,25 +32,40 @@ export type UserResourceType = "user";
 
 export type UserRelation = "self" | "organization" | "installation";
 
-export type UserPermission = "read_info" | "write_info" | "make_admin";
+export type UserPermission =
+    | "read_info"
+    | "write_info"
+    | "delete"
+    | "make_admin"
+    | "admin_control"
+    | "read_ssh"
+    | "write_ssh"
+    | "read_tokens"
+    | "write_tokens"
+    | "read_env_var"
+    | "write_env_var"
+    | "write_temporary_token"
+    | "code_sync";
 
 export type InstallationResourceType = "installation";
 
 export type InstallationRelation = "member" | "admin";
 
-export type InstallationPermission = "create_organization";
+export type InstallationPermission = "create_organization" | "configure";
 
 export type OrganizationResourceType = "organization";
 
-export type OrganizationRelation = "installation" | "member" | "owner";
+export type OrganizationRelation = "installation" | "member" | "owner" | "snapshoter" | "collaborator";
 
 export type OrganizationPermission =
     | "installation_admin"
+    | "installation_member"
     | "read_info"
     | "write_info"
     | "delete"
     | "read_settings"
     | "write_settings"
+    | "read_audit_logs"
     | "read_members"
     | "invite_members"
     | "write_members"
@@ -60,20 +75,37 @@ export type OrganizationPermission =
     | "write_git_provider"
     | "read_billing"
     | "write_billing"
+    | "read_prebuild"
     | "create_workspace"
+    | "read_sessions"
     | "write_billing_admin";
 
 export type ProjectResourceType = "project";
 
-export type ProjectRelation = "org" | "editor" | "viewer";
+export type ProjectRelation = "org" | "viewer";
 
-export type ProjectPermission = "read_info" | "write_info" | "delete";
+export type ProjectPermission =
+    | "editor"
+    | "read_info"
+    | "write_info"
+    | "delete"
+    | "read_env_var"
+    | "write_env_var"
+    | "read_prebuild"
+    | "write_prebuild";
 
 export type WorkspaceResourceType = "workspace";
 
-export type WorkspaceRelation = "org" | "owner";
+export type WorkspaceRelation = "org" | "owner" | "shared";
 
-export type WorkspacePermission = "access" | "stop" | "delete" | "read_info";
+export type WorkspacePermission =
+    | "access"
+    | "start"
+    | "stop"
+    | "delete"
+    | "read_info"
+    | "create_snapshot"
+    | "admin_control";
 
 export const rel = {
     user(id: string) {
@@ -263,6 +295,47 @@ export const rel = {
                     },
                 };
             },
+
+            get snapshoter() {
+                const result2 = {
+                    ...result,
+                    relation: "snapshoter",
+                };
+                return {
+                    organization_member(objectId: string) {
+                        return {
+                            ...result2,
+                            subject: {
+                                object: {
+                                    objectType: "organization",
+                                    objectId: objectId,
+                                },
+                                optionalRelation: "member",
+                            },
+                        } as v1.Relationship;
+                    },
+                };
+            },
+
+            get collaborator() {
+                const result2 = {
+                    ...result,
+                    relation: "collaborator",
+                };
+                return {
+                    user(objectId: string) {
+                        return {
+                            ...result2,
+                            subject: {
+                                object: {
+                                    objectType: "user",
+                                    objectId: objectId,
+                                },
+                            },
+                        } as v1.Relationship;
+                    },
+                };
+            },
         };
     },
 
@@ -294,26 +367,6 @@ export const rel = {
                 };
             },
 
-            get editor() {
-                const result2 = {
-                    ...result,
-                    relation: "editor",
-                };
-                return {
-                    user(objectId: string) {
-                        return {
-                            ...result2,
-                            subject: {
-                                object: {
-                                    objectType: "user",
-                                    objectId: objectId,
-                                },
-                            },
-                        } as v1.Relationship;
-                    },
-                };
-            },
-
             get viewer() {
                 const result2 = {
                     ...result,
@@ -331,13 +384,25 @@ export const rel = {
                             },
                         } as v1.Relationship;
                     },
-                    organization(objectId: string) {
+                    organization_member(objectId: string) {
                         return {
                             ...result2,
                             subject: {
                                 object: {
                                     objectType: "organization",
                                     objectId: objectId,
+                                },
+                                optionalRelation: "member",
+                            },
+                        } as v1.Relationship;
+                    },
+                    get anyUser() {
+                        return {
+                            ...result2,
+                            subject: {
+                                object: {
+                                    objectType: "user",
+                                    objectId: "*",
                                 },
                             },
                         } as v1.Relationship;
@@ -388,6 +453,26 @@ export const rel = {
                                 object: {
                                     objectType: "user",
                                     objectId: objectId,
+                                },
+                            },
+                        } as v1.Relationship;
+                    },
+                };
+            },
+
+            get shared() {
+                const result2 = {
+                    ...result,
+                    relation: "shared",
+                };
+                return {
+                    get anyUser() {
+                        return {
+                            ...result2,
+                            subject: {
+                                object: {
+                                    objectType: "user",
+                                    objectId: "*",
                                 },
                             },
                         } as v1.Relationship;

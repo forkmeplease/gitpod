@@ -18,10 +18,10 @@ export const TeamDB = Symbol("TeamDB");
 export interface TeamDB extends TransactionalDB<TeamDB> {
     findTeams(
         offset: number,
-        limit: number,
+        limit: number | undefined,
         orderBy: keyof Team,
         orderDir: "ASC" | "DESC",
-        searchTerm: string,
+        searchTerm?: string,
     ): Promise<{ total: number; rows: Team[] }>;
     findTeamById(teamId: string): Promise<Team | undefined>;
     findTeamByMembershipId(membershipId: string): Promise<Team | undefined>;
@@ -40,7 +40,7 @@ export interface TeamDB extends TransactionalDB<TeamDB> {
     deleteTeam(teamId: string): Promise<void>;
 
     findOrgSettings(teamId: string): Promise<OrganizationSettings | undefined>;
-    setOrgSettings(teamId: string, settings: Partial<OrganizationSettings>): Promise<void>;
+    setOrgSettings(teamId: string, settings: Partial<OrganizationSettings>): Promise<OrganizationSettings>;
 
     hasActiveSSO(organizationId: string): Promise<boolean>;
 }

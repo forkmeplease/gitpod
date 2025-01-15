@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Gitpod GmbH. All rights reserved.
+// Copyright (c) 2024 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
 // See License.AGPL.txt in the project root for license information.
 
@@ -1418,6 +1418,26 @@ public final class Control {
      * <code>.supervisor.SSHPublicKey host_key = 2;</code>
      */
     io.gitpod.supervisor.api.Control.SSHPublicKeyOrBuilder getHostKeyOrBuilder();
+
+    /**
+     * <pre>
+     * Return userName used by client to authenticate
+     * </pre>
+     *
+     * <code>string user_name = 3;</code>
+     * @return The userName.
+     */
+    java.lang.String getUserName();
+    /**
+     * <pre>
+     * Return userName used by client to authenticate
+     * </pre>
+     *
+     * <code>string user_name = 3;</code>
+     * @return The bytes for userName.
+     */
+    com.google.protobuf.ByteString
+        getUserNameBytes();
   }
   /**
    * Protobuf type {@code supervisor.CreateSSHKeyPairResponse}
@@ -1433,6 +1453,7 @@ public final class Control {
     }
     private CreateSSHKeyPairResponse() {
       privateKey_ = "";
+      userName_ = "";
     }
 
     @java.lang.Override
@@ -1482,6 +1503,12 @@ public final class Control {
                 hostKey_ = subBuilder.buildPartial();
               }
 
+              break;
+            }
+            case 26: {
+              java.lang.String s = input.readStringRequireUtf8();
+
+              userName_ = s;
               break;
             }
             default: {
@@ -1602,6 +1629,52 @@ public final class Control {
       return getHostKey();
     }
 
+    public static final int USER_NAME_FIELD_NUMBER = 3;
+    private volatile java.lang.Object userName_;
+    /**
+     * <pre>
+     * Return userName used by client to authenticate
+     * </pre>
+     *
+     * <code>string user_name = 3;</code>
+     * @return The userName.
+     */
+    @java.lang.Override
+    public java.lang.String getUserName() {
+      java.lang.Object ref = userName_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        userName_ = s;
+        return s;
+      }
+    }
+    /**
+     * <pre>
+     * Return userName used by client to authenticate
+     * </pre>
+     *
+     * <code>string user_name = 3;</code>
+     * @return The bytes for userName.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getUserNameBytes() {
+      java.lang.Object ref = userName_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        userName_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
     private byte memoizedIsInitialized = -1;
     @java.lang.Override
     public final boolean isInitialized() {
@@ -1622,6 +1695,9 @@ public final class Control {
       if (hostKey_ != null) {
         output.writeMessage(2, getHostKey());
       }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(userName_)) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 3, userName_);
+      }
       unknownFields.writeTo(output);
     }
 
@@ -1637,6 +1713,9 @@ public final class Control {
       if (hostKey_ != null) {
         size += com.google.protobuf.CodedOutputStream
           .computeMessageSize(2, getHostKey());
+      }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(userName_)) {
+        size += com.google.protobuf.GeneratedMessageV3.computeStringSize(3, userName_);
       }
       size += unknownFields.getSerializedSize();
       memoizedSize = size;
@@ -1660,6 +1739,8 @@ public final class Control {
         if (!getHostKey()
             .equals(other.getHostKey())) return false;
       }
+      if (!getUserName()
+          .equals(other.getUserName())) return false;
       if (!unknownFields.equals(other.unknownFields)) return false;
       return true;
     }
@@ -1677,6 +1758,8 @@ public final class Control {
         hash = (37 * hash) + HOST_KEY_FIELD_NUMBER;
         hash = (53 * hash) + getHostKey().hashCode();
       }
+      hash = (37 * hash) + USER_NAME_FIELD_NUMBER;
+      hash = (53 * hash) + getUserName().hashCode();
       hash = (29 * hash) + unknownFields.hashCode();
       memoizedHashCode = hash;
       return hash;
@@ -1818,6 +1901,8 @@ public final class Control {
           hostKey_ = null;
           hostKeyBuilder_ = null;
         }
+        userName_ = "";
+
         return this;
       }
 
@@ -1850,6 +1935,7 @@ public final class Control {
         } else {
           result.hostKey_ = hostKeyBuilder_.build();
         }
+        result.userName_ = userName_;
         onBuilt();
         return result;
       }
@@ -1904,6 +1990,10 @@ public final class Control {
         }
         if (other.hasHostKey()) {
           mergeHostKey(other.getHostKey());
+        }
+        if (!other.getUserName().isEmpty()) {
+          userName_ = other.userName_;
+          onChanged();
         }
         this.mergeUnknownFields(other.unknownFields);
         onChanged();
@@ -2183,6 +2273,102 @@ public final class Control {
           hostKey_ = null;
         }
         return hostKeyBuilder_;
+      }
+
+      private java.lang.Object userName_ = "";
+      /**
+       * <pre>
+       * Return userName used by client to authenticate
+       * </pre>
+       *
+       * <code>string user_name = 3;</code>
+       * @return The userName.
+       */
+      public java.lang.String getUserName() {
+        java.lang.Object ref = userName_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          userName_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <pre>
+       * Return userName used by client to authenticate
+       * </pre>
+       *
+       * <code>string user_name = 3;</code>
+       * @return The bytes for userName.
+       */
+      public com.google.protobuf.ByteString
+          getUserNameBytes() {
+        java.lang.Object ref = userName_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          userName_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <pre>
+       * Return userName used by client to authenticate
+       * </pre>
+       *
+       * <code>string user_name = 3;</code>
+       * @param value The userName to set.
+       * @return This builder for chaining.
+       */
+      public Builder setUserName(
+          java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+
+        userName_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * Return userName used by client to authenticate
+       * </pre>
+       *
+       * <code>string user_name = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearUserName() {
+
+        userName_ = getDefaultInstance().getUserName();
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       * Return userName used by client to authenticate
+       * </pre>
+       *
+       * <code>string user_name = 3;</code>
+       * @param value The bytes for userName to set.
+       * @return This builder for chaining.
+       */
+      public Builder setUserNameBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  checkByteStringIsUtf8(value);
+
+        userName_ = value;
+        onChanged();
+        return this;
       }
       @java.lang.Override
       public final Builder setUnknownFields(
@@ -5233,6 +5419,846 @@ public final class Control {
 
   }
 
+  public interface SendHeartBeatRequestOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:supervisor.SendHeartBeatRequest)
+      com.google.protobuf.MessageOrBuilder {
+  }
+  /**
+   * Protobuf type {@code supervisor.SendHeartBeatRequest}
+   */
+  public static final class SendHeartBeatRequest extends
+      com.google.protobuf.GeneratedMessageV3 implements
+      // @@protoc_insertion_point(message_implements:supervisor.SendHeartBeatRequest)
+      SendHeartBeatRequestOrBuilder {
+  private static final long serialVersionUID = 0L;
+    // Use SendHeartBeatRequest.newBuilder() to construct.
+    private SendHeartBeatRequest(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
+      super(builder);
+    }
+    private SendHeartBeatRequest() {
+    }
+
+    @java.lang.Override
+    @SuppressWarnings({"unused"})
+    protected java.lang.Object newInstance(
+        UnusedPrivateParameter unused) {
+      return new SendHeartBeatRequest();
+    }
+
+    @java.lang.Override
+    public final com.google.protobuf.UnknownFieldSet
+    getUnknownFields() {
+      return this.unknownFields;
+    }
+    private SendHeartBeatRequest(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      this();
+      if (extensionRegistry == null) {
+        throw new java.lang.NullPointerException();
+      }
+      com.google.protobuf.UnknownFieldSet.Builder unknownFields =
+          com.google.protobuf.UnknownFieldSet.newBuilder();
+      try {
+        boolean done = false;
+        while (!done) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              done = true;
+              break;
+            default: {
+              if (!parseUnknownField(
+                  input, unknownFields, extensionRegistry, tag)) {
+                done = true;
+              }
+              break;
+            }
+          }
+        }
+      } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
+      } catch (java.io.IOException e) {
+        throw new com.google.protobuf.InvalidProtocolBufferException(
+            e).setUnfinishedMessage(this);
+      } finally {
+        this.unknownFields = unknownFields.build();
+        makeExtensionsImmutable();
+      }
+    }
+    public static final com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatRequest_descriptor;
+    }
+
+    @java.lang.Override
+    protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatRequest_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              io.gitpod.supervisor.api.Control.SendHeartBeatRequest.class, io.gitpod.supervisor.api.Control.SendHeartBeatRequest.Builder.class);
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      unknownFields.writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      size += unknownFields.getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof io.gitpod.supervisor.api.Control.SendHeartBeatRequest)) {
+        return super.equals(obj);
+      }
+      io.gitpod.supervisor.api.Control.SendHeartBeatRequest other = (io.gitpod.supervisor.api.Control.SendHeartBeatRequest) obj;
+
+      if (!unknownFields.equals(other.unknownFields)) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      hash = (29 * hash) + unknownFields.hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        java.nio.ByteBuffer data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        java.nio.ByteBuffer data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        com.google.protobuf.ByteString data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        com.google.protobuf.ByteString data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(byte[] data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        byte[] data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseDelimitedFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest parseFrom(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(io.gitpod.supervisor.api.Control.SendHeartBeatRequest prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code supervisor.SendHeartBeatRequest}
+     */
+    public static final class Builder extends
+        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:supervisor.SendHeartBeatRequest)
+        io.gitpod.supervisor.api.Control.SendHeartBeatRequestOrBuilder {
+      public static final com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatRequest_descriptor;
+      }
+
+      @java.lang.Override
+      protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatRequest_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                io.gitpod.supervisor.api.Control.SendHeartBeatRequest.class, io.gitpod.supervisor.api.Control.SendHeartBeatRequest.Builder.class);
+      }
+
+      // Construct using io.gitpod.supervisor.api.Control.SendHeartBeatRequest.newBuilder()
+      private Builder() {
+        maybeForceBuilderInitialization();
+      }
+
+      private Builder(
+          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+        super(parent);
+        maybeForceBuilderInitialization();
+      }
+      private void maybeForceBuilderInitialization() {
+        if (com.google.protobuf.GeneratedMessageV3
+                .alwaysUseFieldBuilders) {
+        }
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        return this;
+      }
+
+      @java.lang.Override
+      public com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatRequest_descriptor;
+      }
+
+      @java.lang.Override
+      public io.gitpod.supervisor.api.Control.SendHeartBeatRequest getDefaultInstanceForType() {
+        return io.gitpod.supervisor.api.Control.SendHeartBeatRequest.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public io.gitpod.supervisor.api.Control.SendHeartBeatRequest build() {
+        io.gitpod.supervisor.api.Control.SendHeartBeatRequest result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public io.gitpod.supervisor.api.Control.SendHeartBeatRequest buildPartial() {
+        io.gitpod.supervisor.api.Control.SendHeartBeatRequest result = new io.gitpod.supervisor.api.Control.SendHeartBeatRequest(this);
+        onBuilt();
+        return result;
+      }
+
+      @java.lang.Override
+      public Builder clone() {
+        return super.clone();
+      }
+      @java.lang.Override
+      public Builder setField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.setField(field, value);
+      }
+      @java.lang.Override
+      public Builder clearField(
+          com.google.protobuf.Descriptors.FieldDescriptor field) {
+        return super.clearField(field);
+      }
+      @java.lang.Override
+      public Builder clearOneof(
+          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+        return super.clearOneof(oneof);
+      }
+      @java.lang.Override
+      public Builder setRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          int index, java.lang.Object value) {
+        return super.setRepeatedField(field, index, value);
+      }
+      @java.lang.Override
+      public Builder addRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.addRepeatedField(field, value);
+      }
+      @java.lang.Override
+      public Builder mergeFrom(com.google.protobuf.Message other) {
+        if (other instanceof io.gitpod.supervisor.api.Control.SendHeartBeatRequest) {
+          return mergeFrom((io.gitpod.supervisor.api.Control.SendHeartBeatRequest)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(io.gitpod.supervisor.api.Control.SendHeartBeatRequest other) {
+        if (other == io.gitpod.supervisor.api.Control.SendHeartBeatRequest.getDefaultInstance()) return this;
+        this.mergeUnknownFields(other.unknownFields);
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        io.gitpod.supervisor.api.Control.SendHeartBeatRequest parsedMessage = null;
+        try {
+          parsedMessage = PARSER.parsePartialFrom(input, extensionRegistry);
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          parsedMessage = (io.gitpod.supervisor.api.Control.SendHeartBeatRequest) e.getUnfinishedMessage();
+          throw e.unwrapIOException();
+        } finally {
+          if (parsedMessage != null) {
+            mergeFrom(parsedMessage);
+          }
+        }
+        return this;
+      }
+      @java.lang.Override
+      public final Builder setUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.setUnknownFields(unknownFields);
+      }
+
+      @java.lang.Override
+      public final Builder mergeUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.mergeUnknownFields(unknownFields);
+      }
+
+
+      // @@protoc_insertion_point(builder_scope:supervisor.SendHeartBeatRequest)
+    }
+
+    // @@protoc_insertion_point(class_scope:supervisor.SendHeartBeatRequest)
+    private static final io.gitpod.supervisor.api.Control.SendHeartBeatRequest DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new io.gitpod.supervisor.api.Control.SendHeartBeatRequest();
+    }
+
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatRequest getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final com.google.protobuf.Parser<SendHeartBeatRequest>
+        PARSER = new com.google.protobuf.AbstractParser<SendHeartBeatRequest>() {
+      @java.lang.Override
+      public SendHeartBeatRequest parsePartialFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return new SendHeartBeatRequest(input, extensionRegistry);
+      }
+    };
+
+    public static com.google.protobuf.Parser<SendHeartBeatRequest> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public com.google.protobuf.Parser<SendHeartBeatRequest> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public io.gitpod.supervisor.api.Control.SendHeartBeatRequest getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
+  public interface SendHeartBeatResponseOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:supervisor.SendHeartBeatResponse)
+      com.google.protobuf.MessageOrBuilder {
+  }
+  /**
+   * Protobuf type {@code supervisor.SendHeartBeatResponse}
+   */
+  public static final class SendHeartBeatResponse extends
+      com.google.protobuf.GeneratedMessageV3 implements
+      // @@protoc_insertion_point(message_implements:supervisor.SendHeartBeatResponse)
+      SendHeartBeatResponseOrBuilder {
+  private static final long serialVersionUID = 0L;
+    // Use SendHeartBeatResponse.newBuilder() to construct.
+    private SendHeartBeatResponse(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
+      super(builder);
+    }
+    private SendHeartBeatResponse() {
+    }
+
+    @java.lang.Override
+    @SuppressWarnings({"unused"})
+    protected java.lang.Object newInstance(
+        UnusedPrivateParameter unused) {
+      return new SendHeartBeatResponse();
+    }
+
+    @java.lang.Override
+    public final com.google.protobuf.UnknownFieldSet
+    getUnknownFields() {
+      return this.unknownFields;
+    }
+    private SendHeartBeatResponse(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      this();
+      if (extensionRegistry == null) {
+        throw new java.lang.NullPointerException();
+      }
+      com.google.protobuf.UnknownFieldSet.Builder unknownFields =
+          com.google.protobuf.UnknownFieldSet.newBuilder();
+      try {
+        boolean done = false;
+        while (!done) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              done = true;
+              break;
+            default: {
+              if (!parseUnknownField(
+                  input, unknownFields, extensionRegistry, tag)) {
+                done = true;
+              }
+              break;
+            }
+          }
+        }
+      } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
+      } catch (java.io.IOException e) {
+        throw new com.google.protobuf.InvalidProtocolBufferException(
+            e).setUnfinishedMessage(this);
+      } finally {
+        this.unknownFields = unknownFields.build();
+        makeExtensionsImmutable();
+      }
+    }
+    public static final com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatResponse_descriptor;
+    }
+
+    @java.lang.Override
+    protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatResponse_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              io.gitpod.supervisor.api.Control.SendHeartBeatResponse.class, io.gitpod.supervisor.api.Control.SendHeartBeatResponse.Builder.class);
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      unknownFields.writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      size += unknownFields.getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof io.gitpod.supervisor.api.Control.SendHeartBeatResponse)) {
+        return super.equals(obj);
+      }
+      io.gitpod.supervisor.api.Control.SendHeartBeatResponse other = (io.gitpod.supervisor.api.Control.SendHeartBeatResponse) obj;
+
+      if (!unknownFields.equals(other.unknownFields)) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      hash = (29 * hash) + unknownFields.hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        java.nio.ByteBuffer data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        java.nio.ByteBuffer data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        com.google.protobuf.ByteString data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        com.google.protobuf.ByteString data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(byte[] data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        byte[] data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseDelimitedFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse parseFrom(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(io.gitpod.supervisor.api.Control.SendHeartBeatResponse prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code supervisor.SendHeartBeatResponse}
+     */
+    public static final class Builder extends
+        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:supervisor.SendHeartBeatResponse)
+        io.gitpod.supervisor.api.Control.SendHeartBeatResponseOrBuilder {
+      public static final com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatResponse_descriptor;
+      }
+
+      @java.lang.Override
+      protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatResponse_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                io.gitpod.supervisor.api.Control.SendHeartBeatResponse.class, io.gitpod.supervisor.api.Control.SendHeartBeatResponse.Builder.class);
+      }
+
+      // Construct using io.gitpod.supervisor.api.Control.SendHeartBeatResponse.newBuilder()
+      private Builder() {
+        maybeForceBuilderInitialization();
+      }
+
+      private Builder(
+          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+        super(parent);
+        maybeForceBuilderInitialization();
+      }
+      private void maybeForceBuilderInitialization() {
+        if (com.google.protobuf.GeneratedMessageV3
+                .alwaysUseFieldBuilders) {
+        }
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        return this;
+      }
+
+      @java.lang.Override
+      public com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return io.gitpod.supervisor.api.Control.internal_static_supervisor_SendHeartBeatResponse_descriptor;
+      }
+
+      @java.lang.Override
+      public io.gitpod.supervisor.api.Control.SendHeartBeatResponse getDefaultInstanceForType() {
+        return io.gitpod.supervisor.api.Control.SendHeartBeatResponse.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public io.gitpod.supervisor.api.Control.SendHeartBeatResponse build() {
+        io.gitpod.supervisor.api.Control.SendHeartBeatResponse result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public io.gitpod.supervisor.api.Control.SendHeartBeatResponse buildPartial() {
+        io.gitpod.supervisor.api.Control.SendHeartBeatResponse result = new io.gitpod.supervisor.api.Control.SendHeartBeatResponse(this);
+        onBuilt();
+        return result;
+      }
+
+      @java.lang.Override
+      public Builder clone() {
+        return super.clone();
+      }
+      @java.lang.Override
+      public Builder setField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.setField(field, value);
+      }
+      @java.lang.Override
+      public Builder clearField(
+          com.google.protobuf.Descriptors.FieldDescriptor field) {
+        return super.clearField(field);
+      }
+      @java.lang.Override
+      public Builder clearOneof(
+          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+        return super.clearOneof(oneof);
+      }
+      @java.lang.Override
+      public Builder setRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          int index, java.lang.Object value) {
+        return super.setRepeatedField(field, index, value);
+      }
+      @java.lang.Override
+      public Builder addRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.addRepeatedField(field, value);
+      }
+      @java.lang.Override
+      public Builder mergeFrom(com.google.protobuf.Message other) {
+        if (other instanceof io.gitpod.supervisor.api.Control.SendHeartBeatResponse) {
+          return mergeFrom((io.gitpod.supervisor.api.Control.SendHeartBeatResponse)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(io.gitpod.supervisor.api.Control.SendHeartBeatResponse other) {
+        if (other == io.gitpod.supervisor.api.Control.SendHeartBeatResponse.getDefaultInstance()) return this;
+        this.mergeUnknownFields(other.unknownFields);
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        io.gitpod.supervisor.api.Control.SendHeartBeatResponse parsedMessage = null;
+        try {
+          parsedMessage = PARSER.parsePartialFrom(input, extensionRegistry);
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          parsedMessage = (io.gitpod.supervisor.api.Control.SendHeartBeatResponse) e.getUnfinishedMessage();
+          throw e.unwrapIOException();
+        } finally {
+          if (parsedMessage != null) {
+            mergeFrom(parsedMessage);
+          }
+        }
+        return this;
+      }
+      @java.lang.Override
+      public final Builder setUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.setUnknownFields(unknownFields);
+      }
+
+      @java.lang.Override
+      public final Builder mergeUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.mergeUnknownFields(unknownFields);
+      }
+
+
+      // @@protoc_insertion_point(builder_scope:supervisor.SendHeartBeatResponse)
+    }
+
+    // @@protoc_insertion_point(class_scope:supervisor.SendHeartBeatResponse)
+    private static final io.gitpod.supervisor.api.Control.SendHeartBeatResponse DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new io.gitpod.supervisor.api.Control.SendHeartBeatResponse();
+    }
+
+    public static io.gitpod.supervisor.api.Control.SendHeartBeatResponse getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final com.google.protobuf.Parser<SendHeartBeatResponse>
+        PARSER = new com.google.protobuf.AbstractParser<SendHeartBeatResponse>() {
+      @java.lang.Override
+      public SendHeartBeatResponse parsePartialFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return new SendHeartBeatResponse(input, extensionRegistry);
+      }
+    };
+
+    public static com.google.protobuf.Parser<SendHeartBeatResponse> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public com.google.protobuf.Parser<SendHeartBeatResponse> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public io.gitpod.supervisor.api.Control.SendHeartBeatResponse getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
   private static final com.google.protobuf.Descriptors.Descriptor
     internal_static_supervisor_ExposePortRequest_descriptor;
   private static final
@@ -5268,6 +6294,16 @@ public final class Control {
   private static final
     com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_supervisor_CreateDebugEnvResponse_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_supervisor_SendHeartBeatRequest_descriptor;
+  private static final
+    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_supervisor_SendHeartBeatRequest_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_supervisor_SendHeartBeatResponse_descriptor;
+  private static final
+    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_supervisor_SendHeartBeatResponse_fieldAccessorTable;
 
   public static com.google.protobuf.Descriptors.FileDescriptor
       getDescriptor() {
@@ -5281,27 +6317,32 @@ public final class Control {
       "annotations.proto\032\014status.proto\032\ninfo.pr" +
       "oto\"\'\n\021ExposePortRequest\022\014\n\004port\030\001 \001(\rJ\004" +
       "\010\002\020\003\"\024\n\022ExposePortResponse\"\031\n\027CreateSSHK" +
-      "eyPairRequest\"[\n\030CreateSSHKeyPairRespons" +
+      "eyPairRequest\"n\n\030CreateSSHKeyPairRespons" +
       "e\022\023\n\013private_key\030\001 \001(\t\022*\n\010host_key\030\002 \001(\013" +
-      "2\030.supervisor.SSHPublicKey\"+\n\014SSHPublicK" +
-      "ey\022\014\n\004type\030\001 \001(\t\022\r\n\005value\030\002 \001(\t\"\361\001\n\025Crea" +
-      "teDebugEnvRequest\0226\n\016workspace_type\030\001 \001(" +
-      "\0162\036.supervisor.DebugWorkspaceType\0221\n\016con" +
-      "tent_source\030\002 \001(\0162\031.supervisor.ContentSo" +
-      "urce\022\025\n\rworkspace_url\030\003 \001(\t\022\r\n\005tasks\030\004 \001" +
-      "(\t\022\031\n\021checkout_location\030\005 \001(\t\022\032\n\022workspa" +
-      "ce_location\030\006 \001(\t\022\020\n\010logLevel\030\007 \001(\t\"&\n\026C" +
-      "reateDebugEnvResponse\022\014\n\004envs\030\001 \003(\t2\266\002\n\016" +
-      "ControlService\022M\n\nExposePort\022\035.superviso" +
-      "r.ExposePortRequest\032\036.supervisor.ExposeP" +
-      "ortResponse\"\000\022z\n\020CreateSSHKeyPair\022#.supe" +
-      "rvisor.CreateSSHKeyPairRequest\032$.supervi" +
-      "sor.CreateSSHKeyPairResponse\"\033\202\323\344\223\002\025\022\023/v" +
-      "1/ssh_keys/create\022Y\n\016CreateDebugEnv\022!.su" +
-      "pervisor.CreateDebugEnvRequest\032\".supervi" +
-      "sor.CreateDebugEnvResponse\"\000BF\n\030io.gitpo" +
-      "d.supervisor.apiZ*github.com/gitpod-io/g" +
-      "itpod/supervisor/apib\006proto3"
+      "2\030.supervisor.SSHPublicKey\022\021\n\tuser_name\030" +
+      "\003 \001(\t\"+\n\014SSHPublicKey\022\014\n\004type\030\001 \001(\t\022\r\n\005v" +
+      "alue\030\002 \001(\t\"\361\001\n\025CreateDebugEnvRequest\0226\n\016" +
+      "workspace_type\030\001 \001(\0162\036.supervisor.DebugW" +
+      "orkspaceType\0221\n\016content_source\030\002 \001(\0162\031.s" +
+      "upervisor.ContentSource\022\025\n\rworkspace_url" +
+      "\030\003 \001(\t\022\r\n\005tasks\030\004 \001(\t\022\031\n\021checkout_locati" +
+      "on\030\005 \001(\t\022\032\n\022workspace_location\030\006 \001(\t\022\020\n\010" +
+      "logLevel\030\007 \001(\t\"&\n\026CreateDebugEnvResponse" +
+      "\022\014\n\004envs\030\001 \003(\t\"\026\n\024SendHeartBeatRequest\"\027" +
+      "\n\025SendHeartBeatResponse2\250\003\n\016ControlServi" +
+      "ce\022M\n\nExposePort\022\035.supervisor.ExposePort" +
+      "Request\032\036.supervisor.ExposePortResponse\"" +
+      "\000\022z\n\020CreateSSHKeyPair\022#.supervisor.Creat" +
+      "eSSHKeyPairRequest\032$.supervisor.CreateSS" +
+      "HKeyPairResponse\"\033\202\323\344\223\002\025\022\023/v1/ssh_keys/c" +
+      "reate\022Y\n\016CreateDebugEnv\022!.supervisor.Cre" +
+      "ateDebugEnvRequest\032\".supervisor.CreateDe" +
+      "bugEnvResponse\"\000\022p\n\rSendHeartBeat\022 .supe" +
+      "rvisor.SendHeartBeatRequest\032!.supervisor" +
+      ".SendHeartBeatResponse\"\032\202\323\344\223\002\024\022\022/v1/send" +
+      "_heartbeatBF\n\030io.gitpod.supervisor.apiZ*" +
+      "github.com/gitpod-io/gitpod/supervisor/a" +
+      "pib\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -5333,7 +6374,7 @@ public final class Control {
     internal_static_supervisor_CreateSSHKeyPairResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_supervisor_CreateSSHKeyPairResponse_descriptor,
-        new java.lang.String[] { "PrivateKey", "HostKey", });
+        new java.lang.String[] { "PrivateKey", "HostKey", "UserName", });
     internal_static_supervisor_SSHPublicKey_descriptor =
       getDescriptor().getMessageTypes().get(4);
     internal_static_supervisor_SSHPublicKey_fieldAccessorTable = new
@@ -5352,6 +6393,18 @@ public final class Control {
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_supervisor_CreateDebugEnvResponse_descriptor,
         new java.lang.String[] { "Envs", });
+    internal_static_supervisor_SendHeartBeatRequest_descriptor =
+      getDescriptor().getMessageTypes().get(7);
+    internal_static_supervisor_SendHeartBeatRequest_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+        internal_static_supervisor_SendHeartBeatRequest_descriptor,
+        new java.lang.String[] { });
+    internal_static_supervisor_SendHeartBeatResponse_descriptor =
+      getDescriptor().getMessageTypes().get(8);
+    internal_static_supervisor_SendHeartBeatResponse_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+        internal_static_supervisor_SendHeartBeatResponse_descriptor,
+        new java.lang.String[] { });
     com.google.protobuf.ExtensionRegistry registry =
         com.google.protobuf.ExtensionRegistry.newInstance();
     registry.add(com.google.api.AnnotationsProto.http);

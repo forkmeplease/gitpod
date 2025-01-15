@@ -13,6 +13,7 @@ import {
     WorkspaceInstanceConfiguration,
     ImageBuildInfo,
     WorkspaceInstanceRepoStatus,
+    WorkspaceInstanceMetrics,
 } from "@gitpod/gitpod-protocol";
 import { TypeORM } from "../typeorm";
 import { Transformer } from "../transformer";
@@ -77,11 +78,14 @@ export class DBWorkspaceInstance implements WorkspaceInstance {
     @Column("json")
     status: WorkspaceInstanceStatus;
 
-    @Column("simple-json", { nullable: true })
+    @Column({
+        type: "json",
+        nullable: true,
+    })
     gitStatus?: WorkspaceInstanceRepoStatus;
 
     /**
-     * This field is a databse-only copy of status.phase for the sole purpose of creating indexes on it.
+     * This field is a database-only copy of status.phase for the sole purpose of creating indexes on it.
      * Is replicated inside workspace-db-impl.ts/storeInstance.
      */
     @Column({
@@ -98,7 +102,7 @@ export class DBWorkspaceInstance implements WorkspaceInstance {
         type: "simple-json",
         nullable: true,
     })
-    configuration?: WorkspaceInstanceConfiguration;
+    configuration: WorkspaceInstanceConfiguration;
 
     @Column("simple-json", { nullable: true })
     imageBuildInfo?: ImageBuildInfo;
@@ -114,4 +118,10 @@ export class DBWorkspaceInstance implements WorkspaceInstance {
         transformer: Transformer.MAP_EMPTY_STR_TO_UNDEFINED,
     })
     usageAttributionId?: string;
+
+    @Column({
+        type: "simple-json",
+        nullable: true,
+    })
+    metrics?: WorkspaceInstanceMetrics;
 }

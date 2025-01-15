@@ -5,47 +5,50 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useFeatureFlag } from "../data/featureflag-query";
 import { noPersistence } from "../data/setup";
-import { getGitpodService } from "../service/service";
+import { installationClient } from "../service/public-api";
+import { GetOnboardingStateRequest } from "@gitpod/public-api/lib/gitpod/v1/installation_pb";
+import { useInstallationConfiguration } from "../data/installation/default-workspace-image-query";
 
 /**
  * @description Returns a flage stating if the current installation still needs setup before it can be used. Also returns an isLoading indicator as the check is async
  */
 export const useNeedsSetup = () => {
     const { data: onboardingState, isLoading } = useOnboardingState();
-    const enableDedicatedOnboardingFlow = useFeatureFlag("enableDedicatedOnboardingFlow");
+    const { data: installationConfig } = useInstallationConfiguration();
+    const isDedicatedInstallation = !!installationConfig?.isDedicatedInstallation;
 
     // This needs to only be true if we've loaded the onboarding state
-    let needsSetup = !isLoading && onboardingState && onboardingState.isCompleted !== true;
+    let needsSetup = !isLoading && onboardingState && onboardingState.completed !== true;
 
     if (isCurrentHostExcludedFromSetup()) {
         needsSetup = false;
     }
 
     return {
-        needsSetup: enableDedicatedOnboardingFlow && needsSetup,
+        needsSetup: isDedicatedInstallation && needsSetup,
         // disabled queries stay in `isLoading` state, so checking feature flag here too
-        isLoading: enableDedicatedOnboardingFlow && isLoading,
+        isLoading: isDedicatedInstallation && isLoading,
     };
 };
 
-const useOnboardingState = () => {
-    const enableDedicatedOnboardingFlow = useFeatureFlag("enableDedicatedOnboardingFlow");
+export const useOnboardingState = () => {
+    const { data: installationConfig } = useInstallationConfiguration();
 
     return useQuery(
         noPersistence(["onboarding-state"]),
         async () => {
-            return await getGitpodService().server.getOnboardingState();
+            const response = await installationClient.getOnboardingState(new GetOnboardingStateRequest());
+            return response.onboardingState!;
         },
         {
             // Only query if feature flag is enabled
-            enabled: enableDedicatedOnboardingFlow,
+            enabled: !!installationConfig?.isDedicatedInstallation,
         },
     );
 };
 
-// TODO: This is a temporary safety-gurad against this flow showing up on gitpod.io
+// TODO: This is a temporary safety-guard against this flow showing up on gitpod.io
 // We can remove this once we've ensured we're distinguishing different installation types for this
 export const isCurrentHostExcludedFromSetup = () => {
     // Purposely not using isGitpodIo() check here to avoid disabling on preview environments too.

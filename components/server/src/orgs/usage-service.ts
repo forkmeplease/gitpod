@@ -17,6 +17,7 @@ import { inject, injectable } from "inversify";
 import { Authorizer } from "../authorization/authorizer";
 import { ApplicationError, ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
 import { CostCenterJSON, ListUsageRequest, ListUsageResponse } from "@gitpod/gitpod-protocol/lib/usage";
+import { TrustedValue } from "@gitpod/gitpod-protocol/lib/util/scrubbing";
 
 @injectable()
 export class UsageService {
@@ -121,6 +122,7 @@ export class UsageService {
                   }
                 : undefined,
             creditsUsed: response.creditsUsed,
+            ledgerIntervalMinutes: (response.ledgerInterval?.seconds || 0) / 60,
         };
     }
 
@@ -149,9 +151,9 @@ export class UsageService {
         const currentInvoiceCredits = creditBalance.usedCredits;
         const usageLimit = creditBalance.usageLimit;
         if (currentInvoiceCredits >= usageLimit) {
-            log.info({ userId }, "Usage limit reached", {
+            log.info({ userId, organizationId }, "Usage limit reached", {
                 attributionId,
-                currentInvoiceCredits,
+                currentInvoiceCredits: new TrustedValue(currentInvoiceCredits),
                 usageLimit,
             });
             return {
@@ -159,9 +161,9 @@ export class UsageService {
                 attributionId,
             };
         } else if (currentInvoiceCredits > usageLimit * 0.8) {
-            log.info({ userId }, "Usage limit almost reached", {
+            log.info({ userId, organizationId }, "Usage limit almost reached", {
                 attributionId,
-                currentInvoiceCredits,
+                currentInvoiceCredits: new TrustedValue(currentInvoiceCredits),
                 usageLimit,
             });
             return {

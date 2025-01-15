@@ -20,6 +20,7 @@ import (
 	workspacev1 "github.com/gitpod-io/gitpod/ws-manager/api/crd/v1"
 	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -61,9 +62,10 @@ type WorkspaceController struct {
 	metrics                 *workspaceMetrics
 	secretNamespace         string
 	recorder                record.EventRecorder
+	runtime                 container.Runtime
 }
 
-func NewWorkspaceController(c client.Client, recorder record.EventRecorder, nodeName, secretNamespace string, maxConcurrentReconciles int, ops WorkspaceOperations, reg prometheus.Registerer) (*WorkspaceController, error) {
+func NewWorkspaceController(c client.Client, recorder record.EventRecorder, nodeName, secretNamespace string, maxConcurrentReconciles int, ops WorkspaceOperations, reg prometheus.Registerer, runtime container.Runtime) (*WorkspaceController, error) {
 	metrics := newWorkspaceMetrics()
 	reg.Register(metrics)
 
@@ -75,6 +77,7 @@ func NewWorkspaceController(c client.Client, recorder record.EventRecorder, node
 		metrics:                 metrics,
 		secretNamespace:         secretNamespace,
 		recorder:                recorder,
+		runtime:                 runtime,
 	}, nil
 }
 
@@ -123,8 +126,6 @@ func (wsc *WorkspaceController) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	glog.WithFields(workspace.OWI()).WithField("workspace", req.NamespacedName).WithField("phase", workspace.Status.Phase).Info("reconciling workspace")
-
 	if workspace.Status.Phase == workspacev1.WorkspacePhaseCreating ||
 		workspace.Status.Phase == workspacev1.WorkspacePhaseInitializing {
 
@@ -138,7 +139,6 @@ func (wsc *WorkspaceController) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if workspace.Status.Phase == workspacev1.WorkspacePhaseStopping {
-
 		result, err = wsc.handleWorkspaceStop(ctx, &workspace, req)
 		return result, err
 	}
@@ -170,6 +170,8 @@ func (wsc *WorkspaceController) handleWorkspaceInit(ctx context.Context, ws *wor
 		if wsc.latestWorkspace(ctx, ws) != nil {
 			return ctrl.Result{Requeue: true, RequeueAfter: 100 * time.Millisecond}, nil
 		}
+
+		glog.WithFields(ws.OWI()).WithField("workspace", req.NamespacedName).WithField("phase", ws.Status.Phase).Info("handle workspace init")
 
 		init, err := wsc.prepareInitializer(ctx, ws)
 		if err != nil {
@@ -220,16 +222,109 @@ func (wsc *WorkspaceController) handleWorkspaceRunning(ctx context.Context, ws *
 	span, ctx := opentracing.StartSpanFromContext(ctx, "handleWorkspaceRunning")
 	defer tracing.FinishSpan(span, &err)
 
-	log := log.FromContext(ctx)
-	log.Info("handling running workspace")
+	var imageInfo *workspacev1.WorkspaceImageInfo = nil
+	if ws.Status.ImageInfo == nil {
+		getImageInfo := func() (*workspacev1.WorkspaceImageInfo, error) {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			id, err := wsc.runtime.WaitForContainer(ctx, ws.Name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to wait for container: %w", err)
+			}
+			info, err := wsc.runtime.GetContainerImageInfo(ctx, id)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get container image info: %w", err)
+			}
 
-	return ctrl.Result{}, wsc.operations.SetupWorkspace(ctx, ws.Name)
+			err = retry.RetryOnConflict(retryParams, func() error {
+				if err := wsc.Get(ctx, req.NamespacedName, ws); err != nil {
+					return err
+				}
+				ws.Status.ImageInfo = info
+				return wsc.Status().Update(ctx, ws)
+			})
+			if err != nil {
+				return info, fmt.Errorf("failed to update workspace with image info: %w", err)
+			}
+			return info, nil
+		}
+		imageInfo, err = getImageInfo()
+		if err != nil {
+			glog.WithFields(ws.OWI()).WithField("workspace", req.NamespacedName).Errorf("failed to get image info: %v", err)
+		} else {
+			glog.WithFields(ws.OWI()).WithField("workspace", req.NamespacedName).WithField("imageInfo", glog.TrustedValueWrap{Value: imageInfo}).Info("updated image info")
+		}
+	}
+	return ctrl.Result{}, wsc.operations.SetupWorkspace(ctx, ws.Name, imageInfo)
 }
 
 func (wsc *WorkspaceController) handleWorkspaceStop(ctx context.Context, ws *workspacev1.Workspace, req ctrl.Request) (result ctrl.Result, err error) {
-	log := log.FromContext(ctx)
 	span, ctx := opentracing.StartSpanFromContext(ctx, "handleWorkspaceStop")
 	defer tracing.FinishSpan(span, &err)
+
+	if ws.IsConditionTrue(workspacev1.WorkspaceConditionPodRejected) {
+		// edge case only exercised for rejected workspace pods
+		if ws.IsConditionPresent(workspacev1.WorkspaceConditionStateWiped) {
+			// we are done here
+			return ctrl.Result{}, nil
+		}
+
+		return wsc.doWipeWorkspace(ctx, ws, req)
+	}
+
+	// regular case
+	return wsc.doWorkspaceContentBackup(ctx, span, ws, req)
+}
+
+func (wsc *WorkspaceController) doWipeWorkspace(ctx context.Context, ws *workspacev1.Workspace, req ctrl.Request) (result ctrl.Result, err error) {
+	log := log.FromContext(ctx)
+
+	// in this case we are not interested in any backups, but instead are concerned with completely wiping all state that might be dangling somewhere
+	if ws.IsConditionTrue(workspacev1.WorkspaceConditionContainerRunning) {
+		// Container is still running, we need to wait for it to stop.
+		// We should get an event when the condition changes, but requeue
+		// anyways to make sure we act on it in time.
+		return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
+	}
+
+	if wsc.latestWorkspace(ctx, ws) != nil {
+		return ctrl.Result{Requeue: true, RequeueAfter: 100 * time.Millisecond}, nil
+	}
+
+	setStateWipedCondition := func(success bool) {
+		err := retry.RetryOnConflict(retryParams, func() error {
+			if err := wsc.Get(ctx, req.NamespacedName, ws); err != nil {
+				return err
+			}
+
+			if success {
+				ws.Status.SetCondition(workspacev1.NewWorkspaceConditionStateWiped("", metav1.ConditionTrue))
+			} else {
+				ws.Status.SetCondition(workspacev1.NewWorkspaceConditionStateWiped("", metav1.ConditionFalse))
+			}
+			return wsc.Client.Status().Update(ctx, ws)
+		})
+		if err != nil {
+			log.Error(err, "failed to set StateWiped condition")
+		}
+	}
+	log.Info("handling workspace stop - wiping mode")
+	defer log.Info("handling workspace stop - wiping done.")
+
+	err = wsc.operations.WipeWorkspace(ctx, ws.Name)
+	if err != nil {
+		setStateWipedCondition(false)
+		wsc.emitEvent(ws, "Wiping", fmt.Errorf("failed to wipe workspace: %w", err))
+		return ctrl.Result{}, fmt.Errorf("failed to wipe workspace: %w", err)
+	}
+
+	setStateWipedCondition(true)
+
+	return ctrl.Result{}, nil
+}
+
+func (wsc *WorkspaceController) doWorkspaceContentBackup(ctx context.Context, span opentracing.Span, ws *workspacev1.Workspace, req ctrl.Request) (result ctrl.Result, err error) {
+	log := log.FromContext(ctx)
 
 	if c := wsk8s.GetCondition(ws.Status.Conditions, string(workspacev1.WorkspaceConditionContentReady)); c == nil || c.Status == metav1.ConditionFalse {
 		return ctrl.Result{}, fmt.Errorf("workspace content was never ready")
@@ -253,9 +348,52 @@ func (wsc *WorkspaceController) handleWorkspaceStop(ctx context.Context, ws *wor
 		return ctrl.Result{}, nil
 	}
 
+	if ws.IsConditionTrue(workspacev1.WorkspaceConditionContainerRunning) {
+		// Container is still running, we need to wait for it to stop.
+		// We will wait for this situation for up to 5 minutes.
+		// If the container is still in a running state after that,
+		// there may be an issue with state synchronization.
+		// We should start backup anyway to avoid data loss.
+		if !(ws.Status.PodStoppingTime != nil && time.Since(ws.Status.PodStoppingTime.Time) > 5*time.Minute) {
+			// We should get an event when the condition changes, but requeue
+			// anyways to make sure we act on it in time.
+			return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
+		}
+
+		if !ws.IsConditionTrue(workspacev1.WorkspaceConditionForceKilledTask) {
+			err = wsc.forceKillContainerTask(ctx, ws)
+			if err != nil {
+				glog.WithFields(ws.OWI()).WithField("workspace", req.NamespacedName).Errorf("failed to force kill task: %v", err)
+			}
+			err = retry.RetryOnConflict(retryParams, func() error {
+				if err := wsc.Get(ctx, req.NamespacedName, ws); err != nil {
+					return err
+				}
+				ws.Status.SetCondition(workspacev1.NewWorkspaceConditionForceKilledTask())
+				return wsc.Client.Status().Update(ctx, ws)
+			})
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to set force killed task condition: %w", err)
+			}
+			return ctrl.Result{Requeue: true, RequeueAfter: 2 * time.Second}, nil
+		}
+
+		if time.Since(wsk8s.GetCondition(ws.Status.Conditions, string(workspacev1.WorkspaceConditionForceKilledTask)).LastTransitionTime.Time) < 2*time.Second {
+			return ctrl.Result{Requeue: true, RequeueAfter: 2 * time.Second}, nil
+		}
+
+		glog.WithFields(ws.OWI()).WithField("workspace", req.NamespacedName).Warn("workspace container is still running after 5 minutes of deletion, starting backup anyway")
+		err = wsc.dumpWorkspaceContainerInfo(ctx, ws)
+		if err != nil {
+			glog.WithFields(ws.OWI()).WithField("workspace", req.NamespacedName).Errorf("failed to dump container info: %v", err)
+		}
+	}
+
 	if wsc.latestWorkspace(ctx, ws) != nil {
 		return ctrl.Result{Requeue: true, RequeueAfter: 100 * time.Millisecond}, nil
 	}
+
+	glog.WithFields(ws.OWI()).WithField("workspace", req.NamespacedName).WithField("phase", ws.Status.Phase).Info("handle workspace stop")
 
 	disposeStart := time.Now()
 	var snapshotName string
@@ -268,6 +406,7 @@ func (wsc *WorkspaceController) handleWorkspaceStop(ctx context.Context, ws *wor
 			return ctrl.Result{}, fmt.Errorf("failed to get snapshot name and URL: %w", err)
 		}
 
+		// todo(ft): remove this and only set the snapshot url after the actual backup is done (see L320-322) ENT-319
 		// ws-manager-bridge expects to receive the snapshot url while the workspace
 		// is in STOPPING so instead of breaking the assumptions of ws-manager-bridge
 		// we set the url here and not after the snapshot has been taken as otherwise
@@ -293,9 +432,10 @@ func (wsc *WorkspaceController) handleWorkspaceStop(ctx context.Context, ws *wor
 			WorkspaceID: ws.Spec.Ownership.WorkspaceID,
 			InstanceID:  ws.Name,
 		},
-		SnapshotName:    snapshotName,
-		BackupLogs:      ws.Spec.Type == workspacev1.WorkspaceTypePrebuild,
-		UpdateGitStatus: ws.Spec.Type == workspacev1.WorkspaceTypeRegular,
+		SnapshotName:      snapshotName,
+		BackupLogs:        ws.Spec.Type == workspacev1.WorkspaceTypePrebuild,
+		UpdateGitStatus:   ws.Spec.Type == workspacev1.WorkspaceTypeRegular,
+		SkipBackupContent: false,
 	})
 
 	err = retry.RetryOnConflict(retryParams, func() error {
@@ -310,6 +450,9 @@ func (wsc *WorkspaceController) handleWorkspaceStop(ctx context.Context, ws *wor
 			ws.Status.SetCondition(workspacev1.NewWorkspaceConditionBackupFailure(disposeErr.Error()))
 		} else {
 			ws.Status.SetCondition(workspacev1.NewWorkspaceConditionBackupComplete())
+			if ws.Spec.Type != workspacev1.WorkspaceTypeRegular {
+				ws.Status.Snapshot = snapshotUrl
+			}
 		}
 
 		return wsc.Status().Update(ctx, ws)
@@ -332,6 +475,33 @@ func (wsc *WorkspaceController) handleWorkspaceStop(ctx context.Context, ws *wor
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (wsc *WorkspaceController) dumpWorkspaceContainerInfo(ctx context.Context, ws *workspacev1.Workspace) error {
+	id, err := wsc.runtime.WaitForContainer(ctx, ws.Name)
+	if err != nil {
+		return fmt.Errorf("failed to wait for container: %w", err)
+	}
+	task, err := wsc.runtime.GetContainerTaskInfo(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to get container task info: %w", err)
+	}
+	glog.WithFields(ws.OWI()).WithFields(logrus.Fields{
+		"containerID": id,
+		"exitStatus":  task.ExitStatus,
+		"pid":         task.Pid,
+		"exitedAt":    task.ExitedAt.AsTime(),
+		"status":      task.Status.String(),
+	}).Info("container task info")
+	return nil
+}
+
+func (wsc *WorkspaceController) forceKillContainerTask(ctx context.Context, ws *workspacev1.Workspace) error {
+	id, err := wsc.runtime.WaitForContainer(ctx, ws.Name)
+	if err != nil {
+		return fmt.Errorf("failed to wait for container: %w", err)
+	}
+	return wsc.runtime.ForceKillContainerTask(ctx, id)
 }
 
 func (wsc *WorkspaceController) prepareInitializer(ctx context.Context, ws *workspacev1.Workspace) (*csapi.WorkspaceInitializer, error) {

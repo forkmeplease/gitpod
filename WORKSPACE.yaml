@@ -1,32 +1,42 @@
 # this file makes this a leeway workspace
 defaultTarget: components:all
 defaultArgs:
-  imageRepoBase: "eu.gcr.io/gitpod-core-dev/build"
+  imageRepoBase: "eu.gcr.io/gitpod-dev-artifact/build"
   coreYarnLockBase: ../..
   npmPublishTrigger: "false"
   publishToNPM: true
   publishToJBMarketplace: true
   localAppVersion: unknown
-  codeCommit: 598e5d080e7461be33923ee0d231bef718e5c65c
-  codeVersion: 1.81.0
+  codeCommit: b889dadbf401a55d02e2fb98981d9c7832f07ea2
+  codeVersion: 1.96.3
   codeQuality: stable
+  codeWebExtensionCommit: 3953e8160fffa97dd4a4509542b4bf7ff9b704cd
+  xtermCommit: d547d4ff4590b66c3ea24342fc62e3afcf6b77bc
   noVerifyJBPlugin: false
-  intellijDownloadUrl: "https://download.jetbrains.com/idea/ideaIU-2023.1.4.tar.gz"
-  golandDownloadUrl: "https://download.jetbrains.com/go/goland-2023.1.4.tar.gz"
-  pycharmDownloadUrl: "https://download.jetbrains.com/python/pycharm-professional-2023.1.4.tar.gz"
-  phpstormDownloadUrl: "https://download.jetbrains.com/webide/PhpStorm-2023.1.4.tar.gz"
-  rubymineDownloadUrl: "https://download.jetbrains.com/ruby/RubyMine-2023.1.4.tar.gz"
-  webstormDownloadUrl: "https://download.jetbrains.com/webstorm/WebStorm-2023.1.4.tar.gz"
-  riderDownloadUrl: "https://download.jetbrains.com/rider/JetBrains.Rider-2023.1.4.tar.gz"
-  clionDownloadUrl: "https://download.jetbrains.com/cpp/CLion-2023.1.5.tar.gz"
+  intellijDownloadUrl: "https://download.jetbrains.com/idea/ideaIU-2024.3.1.1.tar.gz"
+  golandDownloadUrl: "https://download.jetbrains.com/go/goland-2024.3.1.tar.gz"
+  pycharmDownloadUrl: "https://download.jetbrains.com/python/pycharm-professional-2024.3.1.1.tar.gz"
+  phpstormDownloadUrl: "https://download.jetbrains.com/webide/PhpStorm-2024.3.1.1.tar.gz"
+  rubymineDownloadUrl: "https://download.jetbrains.com/ruby/RubyMine-2024.3.1.1.tar.gz"
+  webstormDownloadUrl: "https://download.jetbrains.com/webstorm/WebStorm-2024.3.1.1.tar.gz"
+  riderDownloadUrl: "https://download.jetbrains.com/rider/JetBrains.Rider-2024.1.4.tar.gz"
+  clionDownloadUrl: "https://download.jetbrains.com/cpp/CLion-2024.3.1.1.tar.gz"
+  rustroverDownloadUrl: "https://download.jetbrains.com/rustrover/RustRover-2024.3.2.tar.gz"
   jbBackendVersion: "latest"
-  dockerVersion: 20.10.23
-  dockerComposeVersion: "2.18.1-gitpod.2"
+  dockerVersion: "20.10.24"
+  dockerComposeVersion: "2.27.0-gitpod.0"
 provenance:
   enabled: true
   slsa: true
+environmentManifest:
+  - name: "go"
+    command: ["sh", "-c", "go version | sed s/arm/amd/"]
+  - name: "arch"
+    command: ["sh", "-c", "echo amd64"]
 defaultVariant:
   env:
+    - GOARCH=amd64
+    - DOCKER_DEFAULT_PLATFORM=linux/amd64
     - NODE_OPTIONS=--max_old_space_size=8192
   srcs:
     exclude:

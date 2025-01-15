@@ -32,8 +32,6 @@ import (
 func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 	var fsshift wsdapi.FSShiftMethod
 	switch ctx.Config.Workspace.Runtime.FSShiftMethod {
-	case config.FSShiftFuseFS:
-		fsshift = wsdapi.FSShiftMethod_FUSE
 	case config.FSShiftShiftFS:
 		fsshift = wsdapi.FSShiftMethod_SHIFTFS
 	default:
@@ -115,6 +113,7 @@ func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 
 	wsdcfg := wsdconfig.Config{
 		Daemon: daemon.Config{
+			RegistryFacadeHost: fmt.Sprintf("reg.%s:%d", ctx.Config.Domain, common.RegistryFacadeServicePort),
 			Runtime: daemon.RuntimeConfig{
 				KubernetesNamespace: ctx.Namespace,
 				SecretsNamespace:    common.WorkspaceSecretsNamespace,

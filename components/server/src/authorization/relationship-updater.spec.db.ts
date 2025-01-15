@@ -4,9 +4,16 @@
  * See License.AGPL.txt in the project root for license information.
  */
 import { v1 } from "@authzed/authzed-node";
-import { BUILTIN_INSTLLATION_ADMIN_USER_ID, ProjectDB, TeamDB, TypeORM, UserDB } from "@gitpod/gitpod-db/lib";
+import {
+    BUILTIN_INSTLLATION_ADMIN_USER_ID,
+    ProjectDB,
+    TeamDB,
+    TypeORM,
+    UserDB,
+    WorkspaceDB,
+} from "@gitpod/gitpod-db/lib";
 import { resetDB } from "@gitpod/gitpod-db/lib/test/reset-db";
-import { AdditionalUserData, User } from "@gitpod/gitpod-protocol";
+import { User, Workspace } from "@gitpod/gitpod-protocol";
 import { Experiments } from "@gitpod/gitpod-protocol/lib/experiments/configcat-server";
 import * as chai from "chai";
 import { Container } from "inversify";
@@ -24,18 +31,18 @@ describe("RelationshipUpdater", async () => {
     let userDB: UserDB;
     let orgDB: TeamDB;
     let projectDB: ProjectDB;
+    let workspaceDB: WorkspaceDB;
     let migrator: RelationshipUpdater;
     let authorizer: Authorizer;
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         BUILTIN_INSTLLATION_ADMIN_USER_ID;
         userDB = container.get<UserDB>(UserDB);
         orgDB = container.get<TeamDB>(TeamDB);
         projectDB = container.get<ProjectDB>(ProjectDB);
+        workspaceDB = container.get<WorkspaceDB>(WorkspaceDB);
         migrator = container.get<RelationshipUpdater>(RelationshipUpdater);
         authorizer = container.get<Authorizer>(Authorizer);
     });
@@ -43,6 +50,8 @@ describe("RelationshipUpdater", async () => {
     afterEach(async () => {
         // Clean-up database
         await resetDB(container.get(TypeORM));
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     it("should update a simple user", async () => {
@@ -57,27 +66,6 @@ describe("RelationshipUpdater", async () => {
         await expected(rel.user(user.id).self.user(user.id));
         await notExpected(rel.installation.admin.user(user.id));
         await expected(rel.installation.member.user(user.id));
-    });
-
-    it("should update a simple user once it was feature-flag disabled", async () => {
-        let user = await userDB.newUser();
-
-        user = await migrator.migrate(user);
-        expect(user.additionalData?.fgaRelationshipsVersion).to.not.be.undefined;
-
-        Experiments.configureTestingClient({
-            centralizedPermissions: false,
-        });
-
-        user = await migrator.migrate(user);
-        expect(user.additionalData?.fgaRelationshipsVersion).to.be.undefined;
-
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
-
-        user = await migrator.migrate(user);
-        expect(user.additionalData?.fgaRelationshipsVersion).to.not.be.undefined;
     });
 
     it("should correctly update a simple user after it moves between org and installation level", async () => {
@@ -274,6 +262,39 @@ describe("RelationshipUpdater", async () => {
         await expected(rel.project(project.id).org.organization(org.id));
     });
 
+    it("should create relationships for all user workspaces", async function () {
+        const user = await userDB.newUser();
+        const org = await orgDB.createTeam(user.id, "MyOrg");
+        const totalWorkspaces = 50;
+        const expectedWorkspaces: Workspace[] = [];
+        for (let i = 0; i < totalWorkspaces; i++) {
+            const workspace = await workspaceDB.store({
+                id: v4(),
+                creationTime: new Date().toISOString(),
+                organizationId: org.id,
+                ownerId: user.id,
+                contextURL: "myContext",
+                type: "regular",
+                description: "myDescription",
+                context: {
+                    title: "myTitle",
+                },
+                shareable: i % 5 === 0,
+                config: {},
+            });
+            expectedWorkspaces.push(workspace);
+        }
+
+        await migrate(user);
+        for (const workspace of expectedWorkspaces) {
+            await expected(rel.workspace(workspace.id).org.organization(org.id));
+            await expected(rel.workspace(workspace.id).owner.user(user.id));
+            if (workspace.shareable) {
+                await expected(rel.workspace(workspace.id).shared.anyUser);
+            }
+        }
+    });
+
     async function expected(relation: v1.Relationship): Promise<void> {
         const rs = await authorizer.find(relation);
         const message = async () => {
@@ -287,15 +308,18 @@ describe("RelationshipUpdater", async () => {
 
     async function notExpected(relation: v1.Relationship): Promise<void> {
         const rs = await authorizer.find(relation);
-        expect(rs).to.be.undefined;
+        expect(
+            rs,
+            `Unexpected relation: ${rs?.subject?.object?.objectType}:${rs?.subject?.object?.objectId}#${rs?.relation}@${rs?.resource?.objectType}:${rs?.resource?.objectId}`,
+        ).to.be.undefined;
     }
 
     async function migrate(user: User): Promise<User> {
         // reset fgaRelationshipsVersion to force update
-        AdditionalUserData.set(user, { fgaRelationshipsVersion: undefined });
-        user = await userDB.storeUser(user);
-        user = await migrator.migrate(user);
-        expect(user.additionalData?.fgaRelationshipsVersion).to.equal(migrator.version);
+        user.fgaRelationshipsVersion = undefined;
+        await userDB.updateUserPartial({ id: user.id, fgaRelationshipsVersion: user.fgaRelationshipsVersion });
+        user = await migrator.migrate(user, true);
+        expect(user.fgaRelationshipsVersion).to.equal(RelationshipUpdater.version);
         return user;
     }
 });

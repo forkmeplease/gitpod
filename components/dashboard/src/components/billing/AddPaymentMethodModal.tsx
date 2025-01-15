@@ -5,16 +5,16 @@
  */
 
 import { AttributionId } from "@gitpod/gitpod-protocol/lib/attribution";
-import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
+import { Elements, PaymentElement, AddressElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { FC, useCallback, useMemo } from "react";
 import Modal, { ModalBody, ModalFooter, ModalFooterAlert, ModalHeader } from "../Modal";
 import { ReactComponent as Spinner } from "../../icons/Spinner.svg";
 import { useStripePromise } from "./use-stripe-promise";
-import { Button } from "../Button";
+import { LoadingButton } from "@podkit/buttons/LoadingButton";
 import { useMutation } from "@tanstack/react-query";
 import { useStripeAppearance } from "./use-stripe-appearance";
-import DropDown from "../DropDown";
-import { useCurrency } from "../../payment-context";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@podkit/select/Select";
+import { Currency, useCurrency } from "../../payment-context";
 import Alert from "../Alert";
 
 type Props = {
@@ -58,6 +58,8 @@ function AddPaymentMethodForm({ attributionId }: { attributionId: string }) {
     const elements = useElements();
     const { currency, setCurrency } = useCurrency();
 
+    const currencySymbol = currency === "EUR" ? "€" : "$";
+
     const confirmPayment = useMutation(async () => {
         const attrId = AttributionId.parse(attributionId);
         if (!stripe || !elements || !attrId) {
@@ -80,7 +82,7 @@ function AddPaymentMethodForm({ attributionId }: { attributionId: string }) {
             }
         } catch (error) {
             console.error("Unable to confirm payment method.", error);
-            let message = error?.message || String(error) || "Unable to confirm your payment method.";
+            const message = error?.message || String(error) || "Unable to confirm your payment method.";
             throw new Error(message);
         }
     });
@@ -94,13 +96,17 @@ function AddPaymentMethodForm({ attributionId }: { attributionId: string }) {
     );
 
     return (
-        <form onSubmit={handleSubmit}>
+        <form
+            onSubmit={handleSubmit}
+            className="flex flex-col max-h-[calc(100dvh-3rem)] min-[576px]:max-h-[calc(100dvh-6rem)] overflow-hidden"
+        >
             <ModalBody>
                 <Alert type="message" className="mb-4">
-                    This card will be used for future charges. We'll be placing a 1.00 hold on it that we'll immediately
-                    release in order to verify your payment method.
+                    This card will be used for future charges. We'll be placing a {currencySymbol}1.00 hold on it that
+                    we'll immediately release in order to verify your payment method.
                 </Alert>
                 <PaymentElement id="payment-element" />
+                <AddressElement id="address-element" options={{ mode: "billing", display: { name: "organization" } }} />
             </ModalBody>
             <ModalFooter
                 className="justify-between"
@@ -114,25 +120,24 @@ function AddPaymentMethodForm({ attributionId }: { attributionId: string }) {
             >
                 <div className="flex items-center space-x-1">
                     <span>Currency:</span>
-                    <DropDown
-                        customClasses="w-32"
-                        renderAsLink={true}
-                        activeEntry={currency}
-                        entries={[
-                            {
-                                title: "EUR",
-                                onClick: () => setCurrency("EUR"),
-                            },
-                            {
-                                title: "USD",
-                                onClick: () => setCurrency("USD"),
-                            },
-                        ]}
-                    />
+                    <Select
+                        value={currency}
+                        onValueChange={(currency) => {
+                            setCurrency(currency as Currency);
+                        }}
+                    >
+                        <SelectTrigger className="w-24">
+                            <SelectValue placeholder="Currency" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="EUR">EUR</SelectItem>
+                            <SelectItem value="USD">USD</SelectItem>
+                        </SelectContent>
+                    </Select>
                 </div>
-                <Button htmlType="submit" disabled={!stripe} loading={confirmPayment.isLoading}>
+                <LoadingButton type="submit" disabled={!stripe} loading={confirmPayment.isLoading}>
                     Confirm
-                </Button>
+                </LoadingButton>
             </ModalFooter>
         </form>
     );

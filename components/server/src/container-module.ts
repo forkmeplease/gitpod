@@ -6,16 +6,17 @@
 
 import { ContainerModule } from "inversify";
 
+import { RedisPublisher, newRedisClient } from "@gitpod/gitpod-db/lib";
 import { IAnalyticsWriter } from "@gitpod/gitpod-protocol/lib/analytics";
-import {
-    ConfigCatClientFactory,
-    getExperimentsClientForBackend,
-} from "@gitpod/gitpod-protocol/lib/experiments/configcat-server";
 import { GitpodFileParser } from "@gitpod/gitpod-protocol/lib/gitpod-file-parser";
 import { PrometheusClientCallMetrics } from "@gitpod/gitpod-protocol/lib/messaging/client-call-metrics";
 import { newAnalyticsWriterFromEnv } from "@gitpod/gitpod-protocol/lib/util/analytics";
 import { DebugApp } from "@gitpod/gitpod-protocol/lib/util/debug-app";
-import { IClientCallMetrics, defaultGRPCOptions } from "@gitpod/gitpod-protocol/lib/util/grpc";
+import {
+    IClientCallMetrics,
+    createClientCallMetricsInterceptor,
+    defaultGRPCOptions,
+} from "@gitpod/gitpod-protocol/lib/util/grpc";
 import { prometheusClientMiddleware } from "@gitpod/gitpod-protocol/lib/util/nice-grpc";
 import { IDEServiceClient, IDEServiceDefinition } from "@gitpod/ide-service-api/lib/ide.pb";
 import { ImageBuilderClientCallMetrics, ImageBuilderClientProvider } from "@gitpod/image-builder/lib";
@@ -32,13 +33,10 @@ import {
     WorkspaceManagerClientProviderSource,
 } from "@gitpod/ws-manager/lib/client-provider-source";
 import * as grpc from "@grpc/grpc-js";
+import { Redis } from "ioredis";
 import { createChannel, createClient, createClientFactory } from "nice-grpc";
 import { retryMiddleware } from "nice-grpc-client-middleware-retry";
 import { API } from "./api/server";
-import { APIStatsService } from "./api/stats";
-import { APITeamsService } from "./api/teams";
-import { APIUserService } from "./api/user";
-import { APIWorkspacesService } from "./api/workspaces";
 import { AuthProviderParams } from "./auth/auth-provider";
 import { AuthProviderService } from "./auth/auth-provider-service";
 import { Authenticator } from "./auth/authenticator";
@@ -49,17 +47,19 @@ import { HostContextProviderImpl } from "./auth/host-context-provider-impl";
 import { AuthJWT, SignInJWT } from "./auth/jwt";
 import { LoginCompletionHandler } from "./auth/login-completion-handler";
 import { VerificationService } from "./auth/verification-service";
+import { InstallationService } from "./auth/installation-service";
 import { Authorizer, createInitializingAuthorizer } from "./authorization/authorizer";
-import { SpiceDBClient, spicedbClientFromEnv } from "./authorization/spicedb";
+import { RelationshipUpdater } from "./authorization/relationship-updater";
+import { RelationshipUpdateJob } from "./authorization/relationship-updater-job";
+import { SpiceDBClientProvider, spiceDBConfigFromEnv } from "./authorization/spicedb";
+import { createSpiceDBAuthorizer } from "./authorization/spicedb-authorizer";
 import { BillingModes } from "./billing/billing-mode";
 import { EntitlementService, EntitlementServiceImpl } from "./billing/entitlement-service";
-import { EntitlementServiceUBP } from "./billing/entitlement-service-ubp";
-import { BitbucketAppSupport } from "./bitbucket/bitbucket-app-support";
+import { EntitlementServiceUBP, LazyOrganizationService } from "./billing/entitlement-service-ubp";
+import { StripeService } from "./billing/stripe-service";
 import { CodeSyncService } from "./code-sync/code-sync-service";
 import { Config, ConfigFile } from "./config";
 import { ConfigurationService } from "./config/configuration-service";
-import { GitHubAppSupport } from "./github/github-app-support";
-import { GitLabAppSupport } from "./gitlab/gitlab-app-support";
 import { IamSessionApp } from "./iam/iam-session-app";
 import { IDEService } from "./ide-service";
 import { DatabaseGarbageCollector } from "./jobs/database-gc";
@@ -71,40 +71,43 @@ import { WebhookEventGarbageCollector } from "./jobs/webhook-gc";
 import { WorkspaceGarbageCollector } from "./jobs/workspace-gc";
 import { LinkedInService } from "./linkedin-service";
 import { LivenessController } from "./liveness/liveness-controller";
+import { RedisSubscriber } from "./messaging/redis-subscriber";
 import { MonitoringEndpointsApp } from "./monitoring-endpoints";
 import { OAuthController } from "./oauth-server/oauth-controller";
 import { OneTimeSecretServer } from "./one-time-secret-server";
+import { OrganizationService } from "./orgs/organization-service";
+import { UsageService } from "./orgs/usage-service";
 import { BitbucketApp } from "./prebuilds/bitbucket-app";
 import { BitbucketServerApp } from "./prebuilds/bitbucket-server-app";
 import { GithubApp } from "./prebuilds/github-app";
 import { GithubAppRules } from "./prebuilds/github-app-rules";
 import { GitHubEnterpriseApp } from "./prebuilds/github-enterprise-app";
 import { GitLabApp } from "./prebuilds/gitlab-app";
-import { IncrementalPrebuildsService } from "./prebuilds/incremental-prebuilds-service";
+import { IncrementalWorkspaceService } from "./prebuilds/incremental-workspace-service";
 import { PrebuildManager } from "./prebuilds/prebuild-manager";
 import { PrebuildStatusMaintainer } from "./prebuilds/prebuilt-status-maintainer";
-import { StartPrebuildContextParser } from "./prebuilds/start-prebuild-context-parser";
-import { ProjectsService } from "./projects/projects-service";
+import { LazyPrebuildManager, ProjectsService } from "./projects/projects-service";
 import { RedisMutex } from "./redis/mutex";
 import { Server } from "./server";
 import { SessionHandler } from "./session-handler";
 import { ContentServiceStorageClient } from "./storage/content-service-client";
 import { StorageClient } from "./storage/storage-client";
 import { AuthorizationService, AuthorizationServiceImpl } from "./user/authorization-service";
+import { EnvVarService } from "./user/env-var-service";
+import { GitpodTokenService } from "./user/gitpod-token-service";
 import { NewsletterSubscriptionController } from "./user/newsletter-subscription-controller";
-import { StripeService } from "./billing/stripe-service";
+import { SSHKeyService } from "./user/sshkey-service";
 import { TokenProvider } from "./user/token-provider";
 import { TokenService } from "./user/token-service";
-import { UsageService } from "./orgs/usage-service";
+import { UserAuthentication } from "./user/user-authentication";
 import { ServerFactory, UserController } from "./user/user-controller";
 import { UserDeletionService } from "./user/user-deletion-service";
-import { UserAuthentication } from "./user/user-authentication";
+import { UserService } from "./user/user-service";
 import { contentServiceBinder } from "./util/content-service-sugar";
 import { WebsocketConnectionManager } from "./websocket/websocket-connection-manager";
 import { ConfigProvider } from "./workspace/config-provider";
 import { IContextParser, IPrefixContextParser } from "./workspace/context-parser";
 import { ContextParser } from "./workspace/context-parser-service";
-import { EnvVarService } from "./workspace/env-var-service";
 import { EnvvarPrefixParser } from "./workspace/envvar-prefix-context-parser";
 import { GitTokenScopeGuesser } from "./workspace/git-token-scope-guesser";
 import { GitTokenValidator } from "./workspace/git-token-validator";
@@ -120,15 +123,18 @@ import { SnapshotService } from "./workspace/snapshot-service";
 import { WorkspaceClusterImagebuilderClientProvider } from "./workspace/workspace-cluster-imagebuilder-client-provider";
 import { WorkspaceDownloadService } from "./workspace/workspace-download-service";
 import { WorkspaceFactory } from "./workspace/workspace-factory";
-import { WorkspaceStarter } from "./workspace/workspace-starter";
-import { SpiceDBAuthorizer } from "./authorization/spicedb-authorizer";
-import { OrganizationService } from "./orgs/organization-service";
-import { RedisSubscriber } from "./messaging/redis-subscriber";
-import { Redis } from "ioredis";
-import { RedisPublisher, newRedisClient } from "@gitpod/gitpod-db/lib";
-import { UserService } from "./user/user-service";
-import { RelationshipUpdater } from "./authorization/relationship-updater";
 import { WorkspaceService } from "./workspace/workspace-service";
+import { WorkspaceStartController } from "./workspace/workspace-start-controller";
+import { WorkspaceStarter } from "./workspace/workspace-starter";
+import { DefaultWorkspaceImageValidator } from "./orgs/default-workspace-image-validator";
+import { ContextAwareAnalyticsWriter } from "./analytics";
+import { ScmService } from "./scm/scm-service";
+import { ContextService } from "./workspace/context-service";
+import { RateLimitter } from "./rate-limitter";
+import { AnalyticsController } from "./analytics-controller";
+import { InstallationAdminCleanup } from "./jobs/installation-admin-cleanup";
+import { AuditLogService } from "./audit/AuditLogService";
+import { AuditLogGarbageCollectorJob } from "./jobs/auditlog-gc";
 
 export const productionContainerModule = new ContainerModule(
     (bind, unbind, isBound, rebind, unbindAsync, onActivation, onDeactivation) => {
@@ -142,6 +148,10 @@ export const productionContainerModule = new ContainerModule(
         bind(UserService).toSelf().inSingletonScope();
         bind(UserDeletionService).toSelf().inSingletonScope();
         bind(AuthorizationService).to(AuthorizationServiceImpl).inSingletonScope();
+
+        bind(SSHKeyService).toSelf().inSingletonScope();
+        bind(GitpodTokenService).toSelf().inSingletonScope();
+        bind(EnvVarService).toSelf().inSingletonScope();
 
         bind(TokenService).toSelf().inSingletonScope();
         bind(TokenProvider).toService(TokenService);
@@ -162,10 +172,15 @@ export const productionContainerModule = new ContainerModule(
         bind(WorkspaceService).toSelf().inSingletonScope();
         bind(WorkspaceFactory).toSelf().inSingletonScope();
         bind(WorkspaceStarter).toSelf().inSingletonScope();
+        bind(WorkspaceStartController).toSelf().inSingletonScope();
         bind(ImageSourceProvider).toSelf().inSingletonScope();
 
         bind(ServerFactory).toAutoFactory(GitpodServerImpl);
         bind(UserController).toSelf().inSingletonScope();
+
+        bind(ContextService).toSelf().inSingletonScope();
+
+        bind(AuditLogService).toSelf().inSingletonScope();
 
         bind(GitpodServerImpl).toSelf();
         bind(WebsocketConnectionManager)
@@ -173,7 +188,13 @@ export const productionContainerModule = new ContainerModule(
                 const serverFactory = () => ctx.container.get<GitpodServerImpl>(GitpodServerImpl);
                 const hostContextProvider = ctx.container.get<HostContextProvider>(HostContextProvider);
                 const config = ctx.container.get<Config>(Config);
-                return new WebsocketConnectionManager(serverFactory, hostContextProvider, config.rateLimiter);
+                const auditLogService = ctx.container.get<AuditLogService>(AuditLogService);
+                return new WebsocketConnectionManager(
+                    serverFactory,
+                    hostContextProvider,
+                    config.rateLimiter,
+                    auditLogService,
+                );
             })
             .inSingletonScope();
 
@@ -243,7 +264,12 @@ export const productionContainerModule = new ContainerModule(
 
         bind(CodeSyncService).toSelf().inSingletonScope();
 
-        bind(IAnalyticsWriter).toDynamicValue(newAnalyticsWriterFromEnv).inSingletonScope();
+        bind(IAnalyticsWriter)
+            .toDynamicValue((ctx) => {
+                const writer = newAnalyticsWriterFromEnv();
+                return new ContextAwareAnalyticsWriter(writer);
+            })
+            .inSingletonScope();
 
         bind(OAuthController).toSelf().inSingletonScope();
 
@@ -251,8 +277,13 @@ export const productionContainerModule = new ContainerModule(
         bind(HeadlessLogController).toSelf().inSingletonScope();
 
         bind(OrganizationService).toSelf().inSingletonScope();
+        bind(LazyOrganizationService).toFactory((ctx) => {
+            return () => {
+                return ctx.container.get<OrganizationService>(OrganizationService);
+            };
+        });
         bind(ProjectsService).toSelf().inSingletonScope();
-        bind(EnvVarService).toSelf().inSingletonScope();
+        bind(ScmService).toSelf().inSingletonScope();
 
         bind(NewsletterSubscriptionController).toSelf().inSingletonScope();
 
@@ -284,18 +315,14 @@ export const productionContainerModule = new ContainerModule(
                         "*": {
                             retryBaseDelayMs: 200,
                             retryMaxAttempts: 15,
-                        },
+                        } as any,
                     });
             })
             .inSingletonScope();
 
-        bind(ConfigCatClientFactory)
-            .toDynamicValue((ctx) => {
-                return () => getExperimentsClientForBackend();
-            })
-            .inSingletonScope();
-
         bind(VerificationService).toSelf().inSingletonScope();
+
+        bind(InstallationService).toSelf().inSingletonScope();
 
         bind(UsageService).toSelf().inSingletonScope();
 
@@ -305,41 +332,49 @@ export const productionContainerModule = new ContainerModule(
         bind(IamSessionApp).toSelf().inSingletonScope();
 
         // Authorization & Perms
-        bind(SpiceDBClient)
-            .toDynamicValue(() => spicedbClientFromEnv())
+        bind(SpiceDBClientProvider)
+            .toDynamicValue((ctx) => {
+                const config = spiceDBConfigFromEnv();
+                if (!config) {
+                    throw new Error("[spicedb] Missing configuration expected in env vars!");
+                }
+                const clientCallMetrics = ctx.container.get<IClientCallMetrics>(IClientCallMetrics);
+                return new SpiceDBClientProvider(
+                    config, //
+                    [createClientCallMetricsInterceptor(clientCallMetrics)],
+                );
+            })
             .inSingletonScope();
-        bind(SpiceDBAuthorizer).toSelf().inSingletonScope();
         bind(Authorizer)
             .toDynamicValue((ctx) => {
-                const authorizer = ctx.container.get<SpiceDBAuthorizer>(SpiceDBAuthorizer);
+                const clientProvider = ctx.container.get<SpiceDBClientProvider>(SpiceDBClientProvider);
+                const authorizer = createSpiceDBAuthorizer(clientProvider);
                 return createInitializingAuthorizer(authorizer);
             })
             .inSingletonScope();
         bind(RelationshipUpdater).toSelf().inSingletonScope();
 
         // grpc / Connect API
-        bind(APIUserService).toSelf().inSingletonScope();
-        bind(APITeamsService).toSelf().inSingletonScope();
-        bind(APIWorkspacesService).toSelf().inSingletonScope();
-        bind(APIStatsService).toSelf().inSingletonScope();
-        bind(API).toSelf().inSingletonScope();
+        API.bindAPI(bind);
 
         bind(AuthJWT).toSelf().inSingletonScope();
         bind(SignInJWT).toSelf().inSingletonScope();
 
         bind(PrebuildManager).toSelf().inSingletonScope();
-        bind(IPrefixContextParser).to(StartPrebuildContextParser).inSingletonScope();
+        bind(LazyPrebuildManager).toFactory((ctx) => {
+            return () => {
+                const prebuildManager = ctx.container.get<PrebuildManager>(PrebuildManager);
+                return prebuildManager;
+            };
+        });
         bind(GithubApp).toSelf().inSingletonScope();
-        bind(GitHubAppSupport).toSelf().inSingletonScope();
         bind(GithubAppRules).toSelf().inSingletonScope();
         bind(PrebuildStatusMaintainer).toSelf().inSingletonScope();
         bind(GitLabApp).toSelf().inSingletonScope();
-        bind(GitLabAppSupport).toSelf().inSingletonScope();
         bind(BitbucketApp).toSelf().inSingletonScope();
-        bind(BitbucketAppSupport).toSelf().inSingletonScope();
         bind(GitHubEnterpriseApp).toSelf().inSingletonScope();
         bind(BitbucketServerApp).toSelf().inSingletonScope();
-        bind(IncrementalPrebuildsService).toSelf().inSingletonScope();
+        bind(IncrementalWorkspaceService).toSelf().inSingletonScope();
 
         // payment/billing
         bind(StripeService).toSelf().inSingletonScope();
@@ -350,6 +385,7 @@ export const productionContainerModule = new ContainerModule(
         bind(BillingModes).toSelf().inSingletonScope();
 
         // Periodic jobs
+        bind(AuditLogGarbageCollectorJob).toSelf().inSingletonScope();
         bind(WorkspaceGarbageCollector).toSelf().inSingletonScope();
         bind(TokenGarbageCollector).toSelf().inSingletonScope();
         bind(WebhookEventGarbageCollector).toSelf().inSingletonScope();
@@ -357,16 +393,33 @@ export const productionContainerModule = new ContainerModule(
         bind(OTSGarbageCollector).toSelf().inSingletonScope();
         bind(SnapshotsJob).toSelf().inSingletonScope();
         bind(JobRunner).toSelf().inSingletonScope();
+        bind(RelationshipUpdateJob).toSelf().inSingletonScope();
+        bind(InstallationAdminCleanup).toSelf().inSingletonScope();
 
         // Redis
         bind(Redis).toDynamicValue((ctx) => {
             const config = ctx.container.get<Config>(Config);
             const [host, port] = config.redis.address.split(":");
-            return newRedisClient({ host, port: Number(port), connectionName: "server" });
+            const username = process.env.REDIS_USERNAME;
+            const password = process.env.REDIS_PASSWORD;
+            return newRedisClient({ host, port: Number(port), connectionName: "server", username, password });
         });
 
         bind(RedisMutex).toSelf().inSingletonScope();
         bind(RedisSubscriber).toSelf().inSingletonScope();
         bind(RedisPublisher).toSelf().inSingletonScope();
+
+        bind<DefaultWorkspaceImageValidator>(DefaultWorkspaceImageValidator)
+            .toDynamicValue((ctx) =>
+                // lazy load to avoid circular dependency
+                async (userId: string, imageRef: string) => {
+                    const user = await ctx.container.get(UserService).findUserById(userId, userId);
+                    await ctx.container.get(WorkspaceService).validateImageRef({}, user, imageRef);
+                },
+            )
+            .inSingletonScope();
+
+        bind(RateLimitter).toSelf().inSingletonScope();
+        bind(AnalyticsController).toSelf().inSingletonScope();
     },
 );

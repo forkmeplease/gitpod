@@ -10,9 +10,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -86,74 +83,6 @@ func main() {
 				},
 				Action: func(c *cli.Context) error {
 					return unix.Mount("none", c.String("target"), "", unix.MS_SHARED, "")
-				},
-			},
-			{
-				Name:  "mount-fusefs-mark",
-				Usage: "mounts a fusefs mark",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "source",
-						Required: true,
-					},
-					&cli.StringFlag{
-						Name:     "merged",
-						Required: true,
-					},
-					&cli.StringFlag{
-						Name:     "upper",
-						Required: true,
-					},
-					&cli.StringFlag{
-						Name:     "work",
-						Required: true,
-					},
-					&cli.StringFlag{
-						Name:     "uidmapping",
-						Required: false,
-					},
-					&cli.StringFlag{
-						Name:     "gidmapping",
-						Required: false,
-					},
-				},
-				Action: func(c *cli.Context) error {
-					target := filepath.Clean(c.String("merged"))
-					upper := filepath.Clean(c.String("upper"))
-					work := filepath.Clean(c.String("work"))
-					source := filepath.Clean(c.String("source"))
-
-					args := []string{
-						fmt.Sprintf("lowerdir=%s,upperdir=%v,workdir=%v", source, upper, work),
-					}
-
-					if len(c.String("uidmapping")) > 0 {
-						args = append(args, fmt.Sprintf("uidmapping=%v", c.String("uidmapping")))
-					}
-
-					if len(c.String("gidmapping")) > 0 {
-						args = append(args, fmt.Sprintf("gidmapping=%v", c.String("gidmapping")))
-					}
-
-					cmd := exec.Command(
-						fmt.Sprintf("%v/.supervisor/fuse-overlayfs", source),
-						"-o",
-						strings.Join(args, ","),
-						"none",
-						target,
-					)
-					cmd.Dir = source
-
-					out, err := cmd.CombinedOutput()
-					if err != nil {
-						return xerrors.Errorf("fuse-overlayfs (%v) failed: %q\n%v",
-							cmd.Args,
-							string(out),
-							err,
-						)
-					}
-
-					return nil
 				},
 			},
 			{
@@ -245,10 +174,13 @@ func main() {
 						return err
 					}
 
-					err = unix.Mknod("/dev/fuse", 0666|unix.S_IFCHR, int(unix.Mkdev(10, 229)))
-					if err != nil {
-						return err
+					if _, err := os.Stat("/dev/fuse"); os.IsNotExist(err) {
+						err = unix.Mknod("/dev/fuse", 0666|unix.S_IFCHR, int(unix.Mkdev(10, 229)))
+						if err != nil {
+							return err
+						}
 					}
+
 					err = os.Chmod("/dev/fuse", os.FileMode(0666))
 					if err != nil {
 						return err
@@ -468,6 +400,13 @@ func main() {
 				Usage: "enable IPv4 forwarding",
 				Action: func(c *cli.Context) error {
 					return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
+				},
+			},
+			{
+				Name:  "disable-ipv6",
+				Usage: "disable IPv6",
+				Action: func(c *cli.Context) error {
+					return os.WriteFile("/proc/sys/net/ipv6/conf/all/disable_ipv6", []byte("1"), 0644)
 				},
 			},
 			{

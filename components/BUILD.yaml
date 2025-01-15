@@ -38,9 +38,13 @@ packages:
       - components/ide/code-desktop:docker-insiders
       - components/ide/code:docker
       - components/ide/code/codehelper:docker
+      - components/ide/code/gitpod-web-extension:docker
+      - components/ide/xterm:docker
       - components/ide/jetbrains/launcher:docker
       - components/ide/jetbrains/backend-plugin:stable
       - components/ide/jetbrains/backend-plugin:latest
+      - components/ide/jetbrains/backend-plugin:stable-rider
+      - components/ide/jetbrains/backend-plugin:latest-rider
       - components/ide/jetbrains/image:goland
       - components/ide/jetbrains/image:goland-latest
       - components/ide/jetbrains/image:intellij
@@ -57,6 +61,8 @@ packages:
       - components/ide/jetbrains/image:rider-latest
       - components/ide/jetbrains/image:clion
       - components/ide/jetbrains/image:clion-latest
+      - components/ide/jetbrains/image:rustrover
+      - components/ide/jetbrains/image:rustrover-latest
       - components/image-builder-bob:docker
       - components/image-builder-mk3:docker
       - components/ipfs/ipfs-cluster:docker
@@ -148,7 +154,7 @@ scripts:
     srcs:
       - components/**/*
     script: |
-      GO_COMPONENTS=( local-app-api content-service-api image-builder-api registry-facade-api supervisor-api ws-daemon-api ws-manager-api ws-manager-bridge-api )
+      GO_COMPONENTS=( local-app-api content-service-api image-builder-api registry-facade-api supervisor-api ws-daemon-api ws-manager-api ws-manager-bridge-api usage-api spicedb )
 
       for COMPONENT in "${GO_COMPONENTS[@]}";do
         echo "Generating code for component $COMPONENT..."
@@ -157,7 +163,7 @@ scripts:
         popd > /dev/null
       done
 
-      WEB_COMPONENTS=( local-app-api/typescript-grpcweb supervisor-api/typescript-grpc supervisor-api/typescript-grpcweb )
+      WEB_COMPONENTS=( local-app-api/typescript-grpcweb supervisor-api/typescript-grpc supervisor-api/typescript-grpcweb spicedb/typescript )
       for COMPONENT in "${WEB_COMPONENTS[@]}";do
         echo "Generating code for component $COMPONENT..."
         pushd $COMPONENT > /dev/null
@@ -172,7 +178,7 @@ scripts:
       - test/**/*
       - dev/**/*
     script: |
-      leeway exec --filter-type go -v -- go mod tidy -compat=1.20
+      leeway exec --filter-type go -v -- go mod tidy -compat=1.22
 
       # not all the code is present in leeway.
       # ensure we update everything containing a go.mod file
@@ -180,7 +186,7 @@ scripts:
         DIRECTORY=$(dirname $COMPONENT)
         echo "$DIRECTORY"
         pushd $DIRECTORY > /dev/null
-        go mod tidy -compat=1.20 -v
+        go mod tidy -compat=1.22 -v
         popd > /dev/null
       done
 
@@ -227,7 +233,19 @@ scripts:
         query="update d_b_user set blocked=0 where name=\"$user\";"
         mysql -e "$query" -u$DB_USERNAME -p$DB_PASSWORD -h 127.0.0.1 gitpod
       fi
+
+      printf "\nFGA: Reset fgaRelationshipsVersion for $user...\n"
+      query="update d_b_user set additionalData = JSON_REMOVE(additionalData, '$.fgaRelationshipsVersion') where name=\"$user\";"
+      mysql -e "$query" -u$DB_USERNAME -p$DB_PASSWORD -h 127.0.0.1 gitpod
+      if [ $? -ne 0 ]; then
+        echo "error resetting fgaRelationshipsVersion"
+        kill $PID || true
+        exit 1
+      fi
       kill $PID || true
+
+      printf "\nRestarting server and redis to pick up DB changes...\n"
+      kubectl rollout restart deployment/server deployment/redis
 
   - name: make-user-admin
     deps:
@@ -256,10 +274,13 @@ scripts:
         echo "No input."
       else
         echo "User: $user"
-        query="update d_b_user set rolesOrPermissions = '[\"admin\"]' where name=\"$user\";"
+        query="update d_b_user set rolesOrPermissions = '[\"admin\", \"admin-permissions\"]', fgaRelationshipsVersion=0 where name=\"$user\";"
         mysql -e "$query" -u$DB_USERNAME -p$DB_PASSWORD -h 127.0.0.1 gitpod
       fi
       kill $PID || true
+
+      printf "\nRestarting server and redis to pick up DB changes...\n"
+      kubectl rollout restart deployment/server deployment/redis
 
   - name: add-smith-token
     deps:

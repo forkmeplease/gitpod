@@ -5,20 +5,19 @@
  */
 
 import * as http from "http";
-import * as express from "express";
-import * as ws from "ws";
+import express from "express";
+import WebSocket from "ws";
 import * as bodyParser from "body-parser";
-import * as cookieParser from "cookie-parser";
+import cookieParser from "cookie-parser";
 import { injectable, inject } from "inversify";
 import * as prom from "prom-client";
 import { SessionHandler } from "./session-handler";
 import { Authenticator } from "./auth/authenticator";
 import { UserController } from "./user/user-controller";
 import { EventEmitter } from "events";
-import { toIWebSocket } from "@gitpod/gitpod-protocol/lib/messaging/node/connection";
+import { createWebSocketConnection, toIWebSocket } from "@gitpod/gitpod-protocol/lib/messaging/node/connection";
 import { WsExpressHandler, WsRequestHandler } from "./express/ws-handler";
-import { isAllowedWebsocketDomain, bottomErrorHandler, unhandledToError } from "./express-util";
-import { createWebSocketConnection } from "vscode-ws-jsonrpc/lib";
+import { isAllowedWebsocketDomain, bottomErrorHandler, unhandledToError, toHeaders } from "./express-util";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 import { AddressInfo } from "net";
 import { WorkspaceDownloadService } from "./workspace/workspace-download-service";
@@ -32,11 +31,7 @@ import { HostContextProvider } from "./auth/host-context-provider";
 import { CodeSyncService } from "./code-sync/code-sync-service";
 import { increaseHttpRequestCounter, observeHttpRequestDuration, setGitpodVersion } from "./prometheus-metrics";
 import { OAuthController } from "./oauth-server/oauth-controller";
-import {
-    HeadlessLogController,
-    HEADLESS_LOGS_PATH_PREFIX,
-    HEADLESS_LOG_DOWNLOAD_PATH_PREFIX,
-} from "./workspace/headless-log-controller";
+import { HeadlessLogController } from "./workspace/headless-log-controller";
 import { NewsletterSubscriptionController } from "./user/newsletter-subscription-controller";
 import { Config } from "./config";
 import { DebugApp } from "@gitpod/gitpod-protocol/lib/util/debug-app";
@@ -51,6 +46,13 @@ import { BitbucketServerApp } from "./prebuilds/bitbucket-server-app";
 import { GitHubEnterpriseApp } from "./prebuilds/github-enterprise-app";
 import { JobRunner } from "./jobs/runner";
 import { RedisSubscriber } from "./messaging/redis-subscriber";
+import {
+    HEADLESS_LOGS_PATH_PREFIX,
+    HEADLESS_LOG_DOWNLOAD_PATH_PREFIX,
+    PREBUILD_LOGS_PATH_PREFIX,
+} from "./workspace/headless-log-service";
+import { runWithRequestContext } from "./util/request-context";
+import { AnalyticsController } from "./analytics-controller";
 
 @injectable()
 export class Server {
@@ -59,7 +61,8 @@ export class Server {
     protected iamSessionApp?: express.Application;
     protected iamSessionAppServer?: http.Server;
 
-    protected apiServer?: http.Server;
+    protected publicApiServer?: http.Server;
+    protected privateApiServer?: http.Server;
 
     protected readonly eventEmitter = new EventEmitter();
     protected app?: express.Application;
@@ -96,6 +99,7 @@ export class Server {
         @inject(IamSessionApp) private readonly iamSessionAppCreator: IamSessionApp,
         @inject(API) private readonly api: API,
         @inject(RedisSubscriber) private readonly redisSubscriber: RedisSubscriber,
+        @inject(AnalyticsController) private readonly analyticsController: AnalyticsController,
     ) {}
 
     public async init(app: express.Application) {
@@ -114,7 +118,7 @@ export class Server {
             const startTime = Date.now();
             req.on("end", () => {
                 const method = req.method;
-                const route = req.route?.path || req.baseUrl || "unknown";
+                const route = String(req.route?.path || req.baseUrl || "unknown");
                 observeHttpRequestDuration(method, route, res.statusCode, (Date.now() - startTime) / 1000);
                 increaseHttpRequestCounter(method, route, res.statusCode);
             });
@@ -142,6 +146,22 @@ export class Server {
         // Install passport
         await this.authenticator.init(app);
 
+        // Use RequestContext for authorization
+        app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+            const abortController = new AbortController();
+            req.on("abort", () => abortController.abort());
+            runWithRequestContext(
+                {
+                    requestKind: "http",
+                    requestMethod: req.path,
+                    signal: abortController.signal,
+                    subjectId: undefined, // Don't use req.user, as that would elevate permissions once we rollout scope-based API tokens
+                    headers: toHeaders(req.headers),
+                },
+                () => next(),
+            );
+        });
+
         // Ensure that host contexts of dynamic auth providers are initialized.
         await this.hostCtxProvider.init();
 
@@ -154,6 +174,7 @@ export class Server {
             // We rely on the origin header being set correctly (needed by regular clients to use Gitpod:
             // CORS allows subdomains to access gitpod.io)
             const verifyOrigin = (origin: string) => {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 let allowedRequest = isAllowedWebsocketDomain(origin, this.config.hostUrl.url.hostname);
                 if (!allowedRequest && this.config.insecureNoDomain) {
                     log.warn("Websocket connection CSRF guard disabled");
@@ -165,7 +186,7 @@ export class Server {
             /**
              * Verify the web socket handshake request.
              */
-            const verifyClient: ws.VerifyClientCallbackAsync = async (info, callback) => {
+            const verifyClient: WebSocket.VerifyClientCallbackAsync = async (info, callback) => {
                 let authenticatedUsingBearerToken = false;
                 if (info.req.url === "/v1") {
                     // Connection attempt with Bearer-Token: be less strict for now
@@ -177,7 +198,7 @@ export class Server {
                     }
 
                     try {
-                        await this.bearerAuth.auth(info.req as express.Request);
+                        await this.bearerAuth.authExpressRequest(info.req as express.Request);
                         authenticatedUsingBearerToken = true;
                     } catch (e) {
                         if (isBearerAuthError(e)) {
@@ -209,7 +230,9 @@ export class Server {
             );
 
             const wsPingPongHandler = new WsConnectionHandler();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             const wsHandler = new WsExpressHandler(httpServer, verifyClient);
+            this.disposables.push(wsHandler);
             wsHandler.ws(
                 websocketConnectionHandler.path,
                 (ws, request) => {
@@ -219,7 +242,8 @@ export class Server {
                 this.sessionHandler.websocket(),
                 ...initSessionHandlers,
                 wsPingPongHandler.handler(),
-                (ws: ws, req: express.Request) => {
+                (ws: WebSocket, req: express.Request) => {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                     websocketConnectionHandler.onConnection((req as any).wsConnection, req);
                 },
             );
@@ -230,7 +254,8 @@ export class Server {
                     (request as any).wsConnection = createWebSocketConnection(websocket, console);
                 },
                 wsPingPongHandler.handler(),
-                (ws: ws, req: express.Request) => {
+                (ws: WebSocket, req: express.Request) => {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                     websocketConnectionHandler.onConnection((req as any).wsConnection, req);
                 },
             );
@@ -269,7 +294,7 @@ export class Server {
         this.disposables.push(Disposable.create(() => this.redisSubscriber.stop().catch(log.error)));
 
         // Start periodic jobs
-        this.jobRunner.start();
+        this.disposables.push(this.jobRunner.start());
 
         this.app = app;
 
@@ -277,19 +302,29 @@ export class Server {
     }
 
     protected async registerRoutes(app: express.Application) {
+        // Authorization: Session only
         app.use(this.userController.apiRouter);
-        app.use(this.oneTimeSecretServer.apiRouter);
         app.use("/workspace-download", this.workspaceDownloadService.apiRouter);
-        app.use("/code-sync", this.codeSyncService.apiRouter);
+        app.use(this.oauthController.oauthRouter);
+        app.use("/_analytics", this.analyticsController.router);
+
+        // Authorization: Session or Bearer token
         app.use(HEADLESS_LOGS_PATH_PREFIX, this.headlessLogController.headlessLogs);
         app.use(HEADLESS_LOG_DOWNLOAD_PATH_PREFIX, this.headlessLogController.headlessLogDownload);
-        app.use("/live", this.livenessController.apiRouter);
+        app.use(PREBUILD_LOGS_PATH_PREFIX, this.headlessLogController.prebuildLogs);
+
+        // Authorization: Bearer token only
+        app.use("/code-sync", this.codeSyncService.apiRouter);
+
+        // Authorization: none
+        app.use(this.oneTimeSecretServer.apiRouter);
         app.use(this.newsletterSubscriptionController.apiRouter);
+        app.use("/live", this.livenessController.apiRouter);
         app.use("/version", (req: express.Request, res: express.Response, next: express.NextFunction) => {
             res.send(this.config.version);
         });
-        app.use(this.oauthController.oauthRouter);
 
+        // Authorization: Custom
         if (this.config.githubApp?.enabled && this.githubApp.server) {
             log.info("Registered GitHub app at /apps/github");
             app.use("/apps/github/", this.githubApp.server?.expressApp);
@@ -338,18 +373,42 @@ export class Server {
             });
         }
 
-        this.apiServer = this.api.listen();
+        this.publicApiServer = this.api.listen();
+        this.privateApiServer = this.api.listenPrivate();
 
         this.debugApp.start();
     }
 
     public async stop() {
-        await this.debugApp.stop();
-        await this.stopServer(this.iamSessionAppServer);
-        await this.stopServer(this.monitoringHttpServer);
-        await this.stopServer(this.httpServer);
-        await this.stopServer(this.apiServer);
-        this.disposables.dispose();
+        // run each stop with a timeout of 30s
+        async function race(workLoad: Promise<any>, task: string, ms: number = 30 * 1000): Promise<void> {
+            const before = Date.now();
+            let timedOut = false;
+            const timeout = new Promise<void>((resolve) =>
+                setTimeout(() => {
+                    timedOut = true;
+                    resolve();
+                }, ms),
+            );
+            await Promise.race([workLoad.catch((e) => log.error("error running " + task, e)), timeout]).then(() => {
+                const duration = Date.now() - before;
+                if (timedOut) {
+                    log.error(`task ${task} timed out after ${duration}ms`);
+                } else {
+                    log.info(`task ${task} took ${duration}ms`);
+                }
+            });
+        }
+        await Promise.all([
+            race(this.debugApp.stop(), "debugapp"),
+            race(this.stopServer(this.iamSessionAppServer), "stop iamsessionapp"),
+            race(this.stopServer(this.monitoringHttpServer), "stop monitoringapp"),
+            race(this.stopServer(this.httpServer), "stop httpserver"),
+            race(this.stopServer(this.privateApiServer), "stop private api server"),
+            race(this.stopServer(this.publicApiServer), "stop public api server"),
+            race((async () => this.disposables.dispose())(), "dispose disposables"),
+        ]);
+
         log.info("server stopped.");
     }
 

@@ -46,25 +46,9 @@ func TestProjectsService_CreateProject(t *testing.T) {
 				ExpectedError: "Name is a required argument.",
 			},
 			{
-				Name: "slug is required",
-				Spec: &v1.Project{
-					Name: "name",
-				},
-				ExpectedError: "Slug is a required argument.",
-			},
-			{
-				Name: "whitespace slug is rejected",
-				Spec: &v1.Project{
-					Name: "name",
-					Slug: " ",
-				},
-				ExpectedError: "Slug is a required argument.",
-			},
-			{
 				Name: "clone url is required",
 				Spec: &v1.Project{
 					Name: "name",
-					Slug: "slug",
 				},
 				ExpectedError: "Clone URL is a required argument.",
 			},
@@ -72,7 +56,6 @@ func TestProjectsService_CreateProject(t *testing.T) {
 				Name: "whitespace clone url is rejected",
 				Spec: &v1.Project{
 					Name:     "name",
-					Slug:     "slug",
 					CloneUrl: " ",
 				},
 				ExpectedError: "Clone URL is a required argument.",
@@ -81,7 +64,6 @@ func TestProjectsService_CreateProject(t *testing.T) {
 				Name: "team ID must be a valid UUID",
 				Spec: &v1.Project{
 					Name:     "name",
-					Slug:     "slug",
 					CloneUrl: "some.clone.url",
 					TeamId:   "my-user",
 				},
@@ -111,7 +93,6 @@ func TestProjectsService_CreateProject(t *testing.T) {
 		projectsMock.EXPECT().CreateProject(gomock.Any(), &protocol.CreateProjectOptions{
 			TeamID:            project.TeamID,
 			Name:              project.Name,
-			Slug:              project.Slug,
 			CloneURL:          project.CloneURL,
 			AppInstallationID: "undefined",
 		}).Return(project, nil)
@@ -119,7 +100,6 @@ func TestProjectsService_CreateProject(t *testing.T) {
 		response, err := client.CreateProject(context.Background(), connect.NewRequest(&v1.CreateProjectRequest{
 			Project: &v1.Project{
 				Name:     project.Name,
-				Slug:     project.Slug,
 				CloneUrl: project.CloneURL,
 				TeamId:   project.TeamID,
 			},
@@ -348,22 +328,22 @@ func setupProjectsService(t *testing.T) (*protocol.MockAPIInterface, v1connect.P
 
 func newProject(p *protocol.Project) *protocol.Project {
 	r := rand.Int()
+	b_false := false
 	result := &protocol.Project{
 		ID:                uuid.New().String(),
 		Name:              fmt.Sprintf("team-%d", r),
-		Slug:              fmt.Sprintf("team-%d", r),
 		TeamID:            uuid.New().String(),
 		CloneURL:          "https://github.com/easyCZ/foobar",
 		AppInstallationID: "1337",
 		Settings: &protocol.ProjectSettings{
-			UseIncrementalPrebuilds:      true,
-			UsePersistentVolumeClaim:     true,
-			KeepOutdatedPrebuildsRunning: true,
-			AllowUsingPreviousPrebuilds:  true,
-			PrebuildEveryNthCommit:       5,
+			UsePersistentVolumeClaim: true,
 			WorkspaceClasses: &protocol.WorkspaceClassesSettings{
 				Regular:  "default",
 				Prebuild: "default",
+			},
+			RestrictedWorkspaceClasses: &[]string{"default"},
+			PrebuildSettings: &protocol.PrebuildSettings{
+				Enable: &b_false,
 			},
 		},
 		CreationTime: "2022-09-09T09:09:09.000Z",
@@ -374,9 +354,6 @@ func newProject(p *protocol.Project) *protocol.Project {
 	}
 	if p.Name != "" {
 		result.Name = p.Name
-	}
-	if p.Slug != "" {
-		result.Slug = p.Slug
 	}
 	if p.UserID != "" {
 		result.UserID = p.UserID

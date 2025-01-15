@@ -24,6 +24,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
+  "id": 5,
   "links": [],
   "liveNow": false,
   "panels": [
@@ -90,12 +91,14 @@
           "fields": "/value/",
           "values": false
         },
+        "showPercentChange": false,
         "text": {
           "titleSize": 1
         },
-        "textMode": "value"
+        "textMode": "value",
+        "wideLayout": true
       },
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "targets": [
         {
           "datasource": {
@@ -146,7 +149,6 @@
         "y": 1
       },
       "id": 2,
-      "links": [],
       "options": {
         "colorMode": "value",
         "graphMode": "none",
@@ -159,9 +161,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "targets": [
         {
           "datasource": {
@@ -232,8 +236,10 @@
       "id": 3,
       "options": {
         "displayMode": "lcd",
+        "maxVizHeight": 300,
         "minVizHeight": 10,
         "minVizWidth": 0,
+        "namePlacement": "auto",
         "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
@@ -243,9 +249,10 @@
           "values": false
         },
         "showUnfilled": true,
+        "sizing": "auto",
         "valueMode": "color"
       },
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "targets": [
         {
           "datasource": {
@@ -292,8 +299,10 @@
       "id": 4,
       "options": {
         "displayMode": "lcd",
+        "maxVizHeight": 300,
         "minVizHeight": 10,
         "minVizWidth": 0,
+        "namePlacement": "auto",
         "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
@@ -303,9 +312,10 @@
           "values": false
         },
         "showUnfilled": true,
+        "sizing": "auto",
         "valueMode": "color"
       },
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "targets": [
         {
           "datasource": {
@@ -334,6 +344,7 @@
             "mode": "palette-classic"
           },
           "custom": {
+            "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisGridShow": true,
@@ -348,6 +359,7 @@
               "tooltip": false,
               "viz": false
             },
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineStyle": {
               "fill": "solid"
@@ -414,7 +426,6 @@
         }
       ],
       "title": "Gitpod Version",
-      "transformations": [],
       "type": "timeseries"
     },
     {
@@ -456,7 +467,7 @@
       "fillGradient": 5,
       "gridPos": {
         "h": 7,
-        "w": 24,
+        "w": 8,
         "x": 0,
         "y": 13
       },
@@ -475,13 +486,12 @@
       },
       "lines": true,
       "linewidth": 1,
-      "links": [],
       "nullPointMode": "null",
       "options": {
         "alertThreshold": true
       },
       "percentage": false,
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
@@ -580,6 +590,233 @@
     },
     {
       "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 36,
+      "panels": [],
+      "title": "SSH Summary",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "The # of connections over SSH. It's possible for a single workspace to have many SSH connections. For example, two tabs on my local machine could both be connected to the same workspace.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "id": 37,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "sum by(cluster) (gitpod_ws_proxy_ssh_connection_count{cluster=~\"$cluster\"})",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        }
+      ],
+      "title": "Active SSH Connections",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 28,
+      "panels": [],
+      "title": "IPFS Storage",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Amount of available storage remaining for IPFS in the workspace clusters. This storage is used as workspace image cache. Clusters must get recreated before this gets too low.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 214748364800
+              },
+              {
+                "color": "#EAB839",
+                "value": 644245094410
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 35,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "min(node_filesystem_avail_bytes{device=\"/dev/mapper/lvm--disk-ipfs\", node=~\"services-.*\", cluster=~\"$cluster\"}) by (cluster)",
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "IPFS Storage Remaining",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
       "datasource": {
         "type": "datasource",
         "uid": "grafana"
@@ -588,7 +825,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 503
+        "y": 37
       },
       "id": 13,
       "panels": [],
@@ -617,9 +854,9 @@
       "fillGradient": 5,
       "gridPos": {
         "h": 7,
-        "w": 24,
+        "w": 8,
         "x": 0,
-        "y": 504
+        "y": 38
       },
       "hiddenSeries": false,
       "id": 6,
@@ -636,13 +873,12 @@
       },
       "lines": true,
       "linewidth": 1,
-      "links": [],
       "nullPointMode": "null",
       "options": {
         "alertThreshold": true
       },
       "percentage": false,
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
@@ -720,7 +956,138 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 994
+        "y": 45
+      },
+      "id": 18,
+      "panels": [],
+      "targets": [
+        {
+          "datasource": {
+            "type": "datasource",
+            "uid": "grafana"
+          },
+          "refId": "A"
+        }
+      ],
+      "title": "Headless node's normalized Load Average",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": {
+        "uid": "$datasource"
+      },
+      "description": "Nodes with a high normalized load average do not represent a real problem, it only means that pods should probably not be scheduled to them.\n\nIf you'd like to see more details about resource consumption of a particular node, you can do so by clicking at the node name.\n",
+      "fill": 1,
+      "fillGradient": 5,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 46
+      },
+      "hiddenSeries": false,
+      "id": 38,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "10.4.1",
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeat": "cluster",
+      "seriesOverrides": [
+        {
+          "alias": "Node Max Load Avg",
+          "color": "#FF0000"
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "datasource": {
+            "uid": "$datasource"
+          },
+          "expr": "topk(5, sum(nodepool:node_load1:normalized{cluster=~\"$cluster\", nodepool=~\".*headless.*\",cell=\"$cell\"}) by (node))\n",
+          "format": "time_series",
+          "intervalFactor": 2,
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "$datasource"
+          },
+          "expr": "1\n",
+          "format": "time_series",
+          "intervalFactor": 2,
+          "legendFormat": "Node Max Load Avg",
+          "refId": "B"
+        }
+      ],
+      "thresholds": [],
+      "timeRegions": [],
+      "title": "$cluster: Headless node's normalized load average",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "mode": "time",
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "none",
+          "logBase": 1,
+          "min": 0,
+          "show": true
+        },
+        {
+          "format": "none",
+          "logBase": 1,
+          "min": 0,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false
+      }
+    },
+    {
+      "collapsed": false,
+      "datasource": {
+        "type": "datasource",
+        "uid": "grafana"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 53
       },
       "id": 14,
       "panels": [],
@@ -767,9 +1134,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 24,
+        "w": 8,
         "x": 0,
-        "y": 995
+        "y": 54
       },
       "heatmap": {},
       "hideZeroBuckets": true,
@@ -806,7 +1173,8 @@
         },
         "showValue": "never",
         "tooltip": {
-          "show": true,
+          "mode": "single",
+          "showColorScale": false,
           "yHistogram": false
         },
         "yAxis": {
@@ -815,7 +1183,7 @@
           "unit": "s"
         }
       },
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "repeat": "cluster",
       "targets": [
         {
@@ -856,7 +1224,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 1485
+        "y": 61
       },
       "id": 15,
       "panels": [],
@@ -885,9 +1253,9 @@
       "fillGradient": 5,
       "gridPos": {
         "h": 7,
-        "w": 24,
+        "w": 8,
         "x": 0,
-        "y": 1486
+        "y": 62
       },
       "hiddenSeries": false,
       "id": 8,
@@ -904,13 +1272,12 @@
       },
       "lines": true,
       "linewidth": 1,
-      "links": [],
       "nullPointMode": "null",
       "options": {
         "alertThreshold": true
       },
       "percentage": false,
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
@@ -1016,7 +1383,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 1976
+        "y": 69
       },
       "id": 16,
       "panels": [],
@@ -1044,9 +1411,9 @@
       "fillGradient": 5,
       "gridPos": {
         "h": 7,
-        "w": 24,
+        "w": 8,
         "x": 0,
-        "y": 1977
+        "y": 70
       },
       "hiddenSeries": false,
       "id": 9,
@@ -1063,13 +1430,12 @@
       },
       "lines": true,
       "linewidth": 1,
-      "links": [],
       "nullPointMode": "null",
       "options": {
         "alertThreshold": true
       },
       "percentage": false,
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
@@ -1145,7 +1511,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 2467
+        "y": 77
       },
       "id": 17,
       "panels": [],
@@ -1173,9 +1539,9 @@
       "fillGradient": 5,
       "gridPos": {
         "h": 7,
-        "w": 24,
+        "w": 8,
         "x": 0,
-        "y": 2468
+        "y": 78
       },
       "hiddenSeries": false,
       "id": 10,
@@ -1192,13 +1558,12 @@
       },
       "lines": true,
       "linewidth": 1,
-      "links": [],
       "nullPointMode": "null",
       "options": {
         "alertThreshold": true
       },
       "percentage": false,
-      "pluginVersion": "9.5.1",
+      "pluginVersion": "10.4.1",
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
@@ -1254,12 +1619,16 @@
   ],
   "refresh": "30s",
   "revision": 1,
-  "schemaVersion": 38,
-  "style": "dark",
+  "schemaVersion": 39,
   "tags": [],
   "templating": {
     "list": [
       {
+        "current": {
+          "selected": false,
+          "text": "VictoriaMetrics",
+          "value": "P4169E866C3094E38"
+        },
         "hide": 0,
         "includeAll": false,
         "multi": false,
@@ -1306,9 +1675,10 @@
       },
       {
         "current": {
-          "selected": true,
-          "text": [],
-          "value": []
+          "isNone": true,
+          "selected": false,
+          "text": "None",
+          "value": ""
         },
         "datasource": {
           "type": "prometheus",

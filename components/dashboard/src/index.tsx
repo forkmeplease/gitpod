@@ -4,6 +4,10 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
+// this should stay at the top to enable monitoring as soon as possible
+import "./service/metrics";
+
+import "setimmediate"; // important!, required by vscode-jsonrpc
 import dayjs from "dayjs";
 import duration from "dayjs/plugin/duration";
 import relativeTime from "dayjs/plugin/relativeTime";
@@ -19,7 +23,6 @@ import { ConfettiContextProvider } from "./contexts/ConfettiContext";
 import { setupQueryClientProvider } from "./data/setup";
 import "./index.css";
 import { PaymentContextProvider } from "./payment-context";
-import { ProjectContextProvider } from "./projects/project-context";
 import { ThemeContextProvider } from "./theme-context";
 import { UserContextProvider } from "./user-context";
 import { getURLHash, isGitpodIo, isWebsiteSlug } from "./utils";
@@ -65,9 +68,7 @@ const bootApp = () => {
                                     <ToastContextProvider>
                                         <UserContextProvider>
                                             <PaymentContextProvider>
-                                                <ProjectContextProvider>
-                                                    <RootAppRouter />
-                                                </ProjectContextProvider>
+                                                <RootAppRouter />
                                             </PaymentContextProvider>
                                         </UserContextProvider>
                                     </ToastContextProvider>

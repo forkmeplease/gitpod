@@ -6,7 +6,7 @@
 
 import { TraceContext } from "@gitpod/gitpod-protocol/lib/util/tracing";
 import { GetWorkspacesRequest } from "@gitpod/ws-manager/lib";
-import { DisposableCollection, RunningWorkspaceInfo, WorkspaceInstance } from "@gitpod/gitpod-protocol";
+import { Disposable, DisposableCollection, RunningWorkspaceInfo, WorkspaceInstance } from "@gitpod/gitpod-protocol";
 import { inject, injectable } from "inversify";
 import { Configuration } from "./config";
 import { log, LogContext } from "@gitpod/gitpod-protocol/lib/util/logging";
@@ -19,10 +19,11 @@ import { ClientProvider } from "./wsman-subscriber";
 import { repeat } from "@gitpod/gitpod-protocol/lib/util/repeat";
 import { PrebuildUpdater } from "./prebuild-updater";
 import { RedisPublisher } from "@gitpod/gitpod-db/lib";
+import { durationLongerThanSeconds } from "@gitpod/gitpod-protocol/lib/util/timeutil";
 
 export const WorkspaceInstanceController = Symbol("WorkspaceInstanceController");
 
-export interface WorkspaceInstanceController {
+export interface WorkspaceInstanceController extends Disposable {
     start(
         workspaceClusterName: string,
         clientProvider: ClientProvider,
@@ -46,7 +47,7 @@ export interface WorkspaceInstanceController {
  * !!! It's statful, so make sure it's bound in transient mode !!!
  */
 @injectable()
-export class WorkspaceInstanceControllerImpl implements WorkspaceInstanceController {
+export class WorkspaceInstanceControllerImpl implements WorkspaceInstanceController, Disposable {
     constructor(
         @inject(Configuration) private readonly config: Configuration,
         @inject(Metrics) private readonly prometheusExporter: Metrics,
@@ -305,8 +306,8 @@ export class WorkspaceInstanceControllerImpl implements WorkspaceInstanceControl
             span.finish();
         }
     }
-}
 
-const durationLongerThanSeconds = (time: number, durationSeconds: number, now: number = Date.now()) => {
-    return (now - time) / 1000 > durationSeconds;
-};
+    public dispose() {
+        this.disposables.dispose();
+    }
+}

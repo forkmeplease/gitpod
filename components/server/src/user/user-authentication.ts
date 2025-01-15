@@ -6,7 +6,7 @@
 
 import { injectable, inject } from "inversify";
 import { User, Identity, Token, IdentityLookup } from "@gitpod/gitpod-protocol";
-import { EmailDomainFilterDB, MaybeUser, UserDB } from "@gitpod/gitpod-db/lib";
+import { BUILTIN_INSTLLATION_ADMIN_USER_ID, EmailDomainFilterDB, MaybeUser, UserDB } from "@gitpod/gitpod-db/lib";
 import { HostContextProvider } from "../auth/host-context-provider";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 import { Config } from "../config";
@@ -14,8 +14,10 @@ import { AuthUser } from "../auth/auth-provider";
 import { TokenService } from "./token-service";
 import { EmailAddressAlreadyTakenException, SelectAccountException } from "../auth/errors";
 import { SelectAccountPayload } from "@gitpod/gitpod-protocol/lib/auth";
-import { ErrorCodes, ApplicationError } from "@gitpod/gitpod-protocol/lib/messaging/error";
 import { UserService } from "./user-service";
+import { Authorizer } from "../authorization/authorizer";
+import { getExperimentsClientForBackend } from "@gitpod/gitpod-protocol/lib/experiments/configcat-server";
+import { isOrganizationOwned, isAllowedToCreateOrganization } from "@gitpod/public-api-common/lib/user-utils";
 
 export interface CreateUserParams {
     organizationId?: string;
@@ -37,14 +39,12 @@ export class UserAuthentication {
         @inject(UserDB) private readonly userDb: UserDB,
         @inject(UserService) private readonly userService: UserService,
         @inject(HostContextProvider) private readonly hostContextProvider: HostContextProvider,
+        @inject(Authorizer) private readonly authorizer: Authorizer,
     ) {}
 
-    async blockUser(targetUserId: string, block: boolean): Promise<User> {
-        const target = await this.userService.findUserById(targetUserId, targetUserId);
-        if (!target) {
-            throw new ApplicationError(ErrorCodes.NOT_FOUND, "not found");
-        }
-
+    async blockUser(userId: string, targetUserId: string, block: boolean): Promise<User> {
+        await this.authorizer.checkPermissionOnUser(userId, "admin_control", targetUserId);
+        const target = await this.userService.findUserById(userId, targetUserId);
         target.blocked = !!block;
         return await this.userDb.storeUser(target);
     }
@@ -119,7 +119,17 @@ export class UserAuthentication {
         await this.userDb.storeUser(user);
     }
 
-    async asserNoTwinAccount(currentUser: User, authHost: string, authProviderId: string, candidate: Identity) {
+    async assertNoTwinAccount(currentUser: User, authHost: string, authProviderId: string, candidate: Identity) {
+        if (User.isOrganizationOwned(currentUser)) {
+            /**
+             * The restriction of SCM identities doesn't apply to organization owned accounts which were
+             * created through OIDC SSO because this identity is not used to create/find the account of a user.
+             *
+             * Hint: with this restriction lifted, the subsequent call to `#updateUserOnLogin` would always add/update
+             * the SCM identity for the given `currentUser` if it's owned by an organization.
+             */
+            return;
+        }
         if (currentUser.identities.some((i) => Identity.equals(i, candidate))) {
             return; // same user => OK
         }
@@ -185,12 +195,29 @@ export class UserAuthentication {
     }
 
     /**
-     * Only installation-level users are allowed to create/join other orgs then the one they belong to
+     * Only installation-level users are allowed to join other orgs then the one they belong to
      * @param user
      * @returns
      */
-    async mayCreateOrJoinOrganization(user: User): Promise<boolean> {
-        return !user.organizationId;
+    async mayJoinOrganization(user: User): Promise<boolean> {
+        return !isOrganizationOwned(user);
+    }
+
+    /**
+     * gitpod.io: Only installation-level users are allowed to create orgs
+     * Dedicated: Only if multiOrg is enabled, installation-level users (=admin-user) can create orgs
+     * @param user
+     * @returns
+     */
+    async mayCreateOrganization(user: User): Promise<boolean> {
+        const isDedicated = this.config.isDedicatedInstallation;
+        const isMultiOrgEnabled = await getExperimentsClientForBackend().getValueAsync("enable_multi_org", false, {
+            gitpodHost: this.config.hostUrl.url.host,
+        });
+        return (
+            isAllowedToCreateOrganization(user, isDedicated, isMultiOrgEnabled) ||
+            (isDedicated && user.id === BUILTIN_INSTLLATION_ADMIN_USER_ID)
+        );
     }
 
     async isBlocked(params: CheckIsBlockedParams): Promise<boolean> {

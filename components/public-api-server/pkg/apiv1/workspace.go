@@ -34,6 +34,39 @@ type WorkspaceService struct {
 	v1connect.UnimplementedWorkspacesServiceHandler
 }
 
+func (s *WorkspaceService) CreateAndStartWorkspace(ctx context.Context, req *connect.Request[v1.CreateAndStartWorkspaceRequest]) (*connect.Response[v1.CreateAndStartWorkspaceResponse], error) {
+
+	conn, err := getConnection(ctx, s.connectionPool)
+	if err != nil {
+		return nil, err
+	}
+
+	ws, err := conn.CreateWorkspace(ctx, &protocol.CreateWorkspaceOptions{
+		ContextURL:                         req.Msg.GetContextUrl(),
+		OrganizationId:                     req.Msg.GetOrganizationId(),
+		IgnoreRunningWorkspaceOnSameCommit: req.Msg.GetIgnoreRunningWorkspaceOnSameCommit(),
+		IgnoreRunningPrebuild:              req.Msg.GetIgnoreRunningPrebuild(),
+		AllowUsingPreviousPrebuilds:        req.Msg.GetAllowUsingPreviousPrebuilds(),
+		ForceDefaultConfig:                 req.Msg.GetForceDefaultConfig(),
+		StartWorkspaceOptions: protocol.StartWorkspaceOptions{
+			WorkspaceClass: req.Msg.GetStartSpec().GetWorkspaceClass(),
+			Region:         req.Msg.GetStartSpec().GetRegion(),
+			IdeSettings: &protocol.IDESettings{
+				DefaultIde:       req.Msg.StartSpec.IdeSettings.GetDefaultIde(),
+				UseLatestVersion: req.Msg.StartSpec.IdeSettings.GetUseLatestVersion(),
+			},
+		},
+	})
+	if err != nil {
+		log.Extract(ctx).WithError(err).Error("Failed to create workspace.")
+		return nil, proxy.ConvertError(err)
+	}
+
+	return connect.NewResponse(&v1.CreateAndStartWorkspaceResponse{
+		WorkspaceId: ws.CreatedWorkspaceID,
+	}), nil
+}
+
 func (s *WorkspaceService) GetWorkspace(ctx context.Context, req *connect.Request[v1.GetWorkspaceRequest]) (*connect.Response[v1.GetWorkspaceResponse], error) {
 	workspaceID, err := validateWorkspaceID(ctx, req.Msg.GetWorkspaceId())
 	if err != nil {
@@ -91,10 +124,7 @@ func (s *WorkspaceService) StreamWorkspaceStatus(ctx context.Context, req *conne
 	}
 
 	for update := range ch {
-		liveGitStatus := experiments.SupervisorLiveGitStatus(ctx, s.expClient, experiments.Attributes{
-			UserID: workspace.Workspace.OwnerID,
-		})
-		instance, err := convertWorkspaceInstance(update, workspace.Workspace.Context, workspace.Workspace.Config, workspace.Workspace.Shareable, liveGitStatus)
+		instance, err := convertWorkspaceInstance(update, workspace.Workspace.Context, workspace.Workspace.Config, workspace.Workspace.Shareable)
 		if err != nil {
 			log.Extract(ctx).WithError(err).Error("Failed to convert workspace instance.")
 			return proxy.ConvertError(err)
@@ -299,6 +329,61 @@ func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, req *connect.Req
 	return connect.NewResponse(&v1.DeleteWorkspaceResponse{}), nil
 }
 
+func (s *WorkspaceService) ListWorkspaceClasses(ctx context.Context, req *connect.Request[v1.ListWorkspaceClassesRequest]) (*connect.Response[v1.ListWorkspaceClassesResponse], error) {
+	conn, err := getConnection(ctx, s.connectionPool)
+	if err != nil {
+		return nil, err
+	}
+
+	classes, err := conn.GetSupportedWorkspaceClasses(ctx)
+	if err != nil {
+		log.Extract(ctx).WithError(err).Error("Failed to get workspace classes.")
+		return nil, proxy.ConvertError(err)
+	}
+
+	res := make([]*v1.WorkspaceClass, 0, len(classes))
+	for _, c := range classes {
+		res = append(res, &v1.WorkspaceClass{
+			Id:          c.ID,
+			DisplayName: c.DisplayName,
+			Description: c.Description,
+			IsDefault:   c.IsDefault,
+		})
+	}
+
+	return connect.NewResponse(
+		&v1.ListWorkspaceClassesResponse{
+			Result: res,
+		},
+	), nil
+}
+
+func (s *WorkspaceService) GetDefaultWorkspaceImage(ctx context.Context, req *connect.Request[v1.GetDefaultWorkspaceImageRequest]) (*connect.Response[v1.GetDefaultWorkspaceImageResponse], error) {
+	conn, err := getConnection(ctx, s.connectionPool)
+	if err != nil {
+		return nil, err
+	}
+	wsImage, err := conn.GetDefaultWorkspaceImage(ctx, &protocol.GetDefaultWorkspaceImageParams{
+		WorkspaceID: req.Msg.GetWorkspaceId(),
+	})
+	if err != nil {
+		log.Extract(ctx).WithError(err).Error("Failed to get default workspace image.")
+		return nil, proxy.ConvertError(err)
+	}
+
+	source := v1.GetDefaultWorkspaceImageResponse_IMAGE_SOURCE_UNSPECIFIED
+	if wsImage.Source == protocol.WorkspaceImageSourceInstallation {
+		source = v1.GetDefaultWorkspaceImageResponse_IMAGE_SOURCE_INSTALLATION
+	} else if wsImage.Source == protocol.WorkspaceImageSourceOrganization {
+		source = v1.GetDefaultWorkspaceImageResponse_IMAGE_SOURCE_ORGANIZATION
+	}
+
+	return connect.NewResponse(&v1.GetDefaultWorkspaceImageResponse{
+		Image:  wsImage.Image,
+		Source: source,
+	}), nil
+}
+
 func getLimitFromPagination(pagination *v1.Pagination) (int, error) {
 	const (
 		defaultLimit = 20
@@ -319,15 +404,12 @@ func getLimitFromPagination(pagination *v1.Pagination) (int, error) {
 }
 
 func (s *WorkspaceService) convertWorkspaceInfo(ctx context.Context, input *protocol.WorkspaceInfo) (*v1.Workspace, error) {
-	liveGitStatus := experiments.SupervisorLiveGitStatus(ctx, s.expClient, experiments.Attributes{
-		UserID: input.Workspace.OwnerID,
-	})
-	return convertWorkspaceInfo(input, liveGitStatus)
+	return convertWorkspaceInfo(input)
 }
 
 // convertWorkspaceInfo converts a "protocol workspace" to a "public API workspace". Returns gRPC errors if things go wrong.
-func convertWorkspaceInfo(input *protocol.WorkspaceInfo, liveGitStatus bool) (*v1.Workspace, error) {
-	instance, err := convertWorkspaceInstance(input.LatestInstance, input.Workspace.Context, input.Workspace.Config, input.Workspace.Shareable, liveGitStatus)
+func convertWorkspaceInfo(input *protocol.WorkspaceInfo) (*v1.Workspace, error) {
+	instance, err := convertWorkspaceInstance(input.LatestInstance, input.Workspace.Context, input.Workspace.Config, input.Workspace.Shareable)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +434,22 @@ func convertWorkspaceInfo(input *protocol.WorkspaceInfo, liveGitStatus bool) (*v
 	}, nil
 }
 
-func convertWorkspaceInstance(wsi *protocol.WorkspaceInstance, wsCtx *protocol.WorkspaceContext, config *protocol.WorkspaceConfig, shareable bool, liveGitStatus bool) (*v1.WorkspaceInstance, error) {
+func convertIdeConfig(ideConfig *protocol.WorkspaceInstanceIDEConfig) *v1.WorkspaceInstanceStatus_EditorReference {
+	if ideConfig == nil {
+		return nil
+	}
+	ideVersion := "stable"
+	if ideConfig.UseLatest {
+		ideVersion = "latest"
+	}
+	return &v1.WorkspaceInstanceStatus_EditorReference{
+		Name:          ideConfig.IDE,
+		Version:       ideVersion,
+		PreferToolbox: ideConfig.PreferToolbox,
+	}
+}
+
+func convertWorkspaceInstance(wsi *protocol.WorkspaceInstance, wsCtx *protocol.WorkspaceContext, config *protocol.WorkspaceConfig, shareable bool) (*v1.WorkspaceInstance, error) {
 	if wsi == nil {
 		return nil, nil
 	}
@@ -437,11 +534,11 @@ func convertWorkspaceInstance(wsi *protocol.WorkspaceInstance, wsCtx *protocol.W
 	}
 	recentFolders = append(recentFolders, filepath.Join("/workspace", location))
 
-	var gitStatus *v1.GitStatus
-	if liveGitStatus {
-		gitStatus = convertGitStatus(wsi.GitStatus)
-	} else {
-		gitStatus = convertGitStatus(wsi.Status.Repo)
+	gitStatus := convertGitStatus(wsi.GitStatus)
+
+	var editor *v1.WorkspaceInstanceStatus_EditorReference
+	if wsi.Configuration != nil && wsi.Configuration.IDEConfig != nil {
+		editor = convertIdeConfig(wsi.Configuration.IDEConfig)
 	}
 
 	return &v1.WorkspaceInstance{
@@ -462,6 +559,7 @@ func convertWorkspaceInstance(wsi *protocol.WorkspaceInstance, wsCtx *protocol.W
 			Ports:         ports,
 			RecentFolders: recentFolders,
 			GitStatus:     gitStatus,
+			Editor:        editor,
 		},
 	}, nil
 }

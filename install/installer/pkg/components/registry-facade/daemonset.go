@@ -72,6 +72,7 @@ func daemonset(ctx *common.RenderContext) ([]runtime.Object, error) {
 		hashObj = append(hashObj, objs...)
 	}
 
+	//nolint:typecheck
 	configHash, err := common.ObjectHash(hashObj, nil)
 	if err != nil {
 		return nil, err
@@ -188,6 +189,11 @@ func daemonset(ctx *common.RenderContext) ([]runtime.Object, error) {
 					RestartPolicy:                 corev1.RestartPolicyAlways,
 					TerminationGracePeriodSeconds: pointer.Int64(30),
 					InitContainers:                initContainers,
+					Tolerations: []corev1.Toleration{
+						{
+							Operator: "Exists",
+						},
+					},
 					Containers: []corev1.Container{{
 						Name:            Component,
 						Image:           ctx.ImageName(ctx.Config.Repository, Component, ctx.VersionManifest.Components.RegistryFacade.Version),
@@ -202,6 +208,7 @@ func daemonset(ctx *common.RenderContext) ([]runtime.Object, error) {
 						Ports: []corev1.ContainerPort{{
 							Name:          ContainerPortName,
 							ContainerPort: ServicePort,
+							HostPort:      ServicePort,
 						}},
 						SecurityContext: &corev1.SecurityContext{
 							Privileged:               pointer.Bool(false),
@@ -245,7 +252,7 @@ func daemonset(ctx *common.RenderContext) ([]runtime.Object, error) {
 									Port: intstr.IntOrString{IntVal: ReadinessPort},
 								},
 							},
-							InitialDelaySeconds: 5,
+							InitialDelaySeconds: 10,
 							PeriodSeconds:       5,
 							TimeoutSeconds:      2,
 							SuccessThreshold:    2,
@@ -303,7 +310,6 @@ func daemonset(ctx *common.RenderContext) ([]runtime.Object, error) {
 						},
 						common.CAVolume(),
 					}, volumes...),
-					Tolerations: common.GPUToleration(),
 				},
 			},
 			UpdateStrategy: common.DaemonSetRolloutStrategy(),

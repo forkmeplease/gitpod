@@ -51,16 +51,45 @@ if (typeof (Symbol as any).asyncIterator === "undefined") {
     (Symbol as any).asyncIterator = Symbol.asyncIterator || Symbol("asyncIterator");
 }
 
-import * as express from "express";
+import express from "express";
 import { Container } from "inversify";
 import { Server } from "./server";
 import { log, LogrusLogLevel } from "@gitpod/gitpod-protocol/lib/util/logging";
+import { installLogCountMetric } from "@gitpod/gitpod-protocol/lib/util/logging-node";
 import { TracingManager } from "@gitpod/gitpod-protocol/lib/util/tracing";
+import { TypeORM } from "@gitpod/gitpod-db/lib";
+import { dbConnectionsEnqueued, dbConnectionsFree, dbConnectionsTotal } from "./prometheus-metrics";
+import { installCtxLogAugmenter } from "./util/log-context";
 if (process.env.NODE_ENV === "development") {
     require("longjohn");
 }
 
 log.enableJSONLogging("server", process.env.VERSION, LogrusLogLevel.getFromEnv());
+installCtxLogAugmenter();
+installLogCountMetric();
+
+// eslint-disable-next-line @typescript-eslint/no-floating-promises
+(async () => {
+    if (process.env.GOOGLE_CLOUD_PROFILER?.toLocaleLowerCase() !== "true") {
+        console.log("skipping cloud profiler, not enabled");
+        return;
+    }
+    console.log("starting cloud profiler");
+
+    try {
+        const profiler = await import("@google-cloud/profiler");
+        // there is no way to stop it: https://github.com/googleapis/cloud-profiler-nodejs/issues/876
+        // disable google_cloud_profiler and cycle servers
+        await profiler.start({
+            serviceContext: {
+                service: "server",
+                version: process.env.VERSION,
+            },
+        });
+    } catch (err) {
+        console.error("failed to start cloud profiler", err);
+    }
+})();
 
 export async function start(container: Container) {
     const server = container.get(Server);
@@ -76,9 +105,39 @@ export async function start(container: Container) {
         }
     });
 
+    let interval: NodeJS.Timeout;
+
+    try {
+        const connection = await container.get(TypeORM).getConnection();
+        const pool: any = (connection.driver as any).pool;
+        interval = setInterval(async () => {
+            try {
+                const activeConnections = pool._allConnections.length as number;
+                const freeConnections = pool._freeConnections.length as number;
+
+                dbConnectionsTotal.set(activeConnections);
+                dbConnectionsFree.set(freeConnections);
+            } catch (error) {
+                log.error("Error updating TypeORM metrics", error);
+            }
+        }, 5000);
+
+        pool.on("enqueue", function () {
+            try {
+                dbConnectionsEnqueued.inc();
+            } catch (error) {
+                log.error("Error updating TypeOrm metrics", error);
+            }
+        });
+    } catch (error) {
+        log.error("Error registering pool listener", error);
+    }
+
     process.on("SIGTERM", async () => {
         log.info("SIGTERM received, stopping");
+        clearInterval(interval);
         await server.stop();
+        process.exit(0);
     });
 
     const tracing = container.get(TracingManager);

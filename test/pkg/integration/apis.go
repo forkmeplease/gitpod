@@ -68,15 +68,17 @@ func NewComponentAPI(ctx context.Context, namespace string, kubeconfig string, c
 		imgbldStatusMu:         sync.Mutex{},
 
 		serverStatus: &serverStatus{
-			Client: make(map[string]*gitpod.APIoverJSONRPC),
-			Token:  make(map[string]string),
+			Client:     make(map[string]*gitpod.APIoverJSONRPC),
+			Token:      make(map[string]string),
+			PAPIClient: make(map[string]*PAPIClient),
 		},
 	}
 }
 
 type serverStatus struct {
-	Token  map[string]string
-	Client map[string]*gitpod.APIoverJSONRPC
+	Token      map[string]string
+	Client     map[string]*gitpod.APIoverJSONRPC
+	PAPIClient map[string]*PAPIClient
 }
 
 // ComponentAPI provides access to the individual component's API
@@ -107,6 +109,7 @@ type ComponentAPI struct {
 	wsmanStatusMu          sync.Mutex
 	contentServiceStatusMu sync.Mutex
 	imgbldStatusMu         sync.Mutex
+	serverStatusMu         sync.Mutex
 }
 
 type EncryptionKeyMetadata struct {
@@ -285,7 +288,11 @@ func (c *ComponentAPI) GitpodServer(opts ...GitpodServerOpt) (gitpod.APIInterfac
 			if err != nil {
 				return err
 			}
-			c.serverStatus.Token[options.User] = tkn
+			func() {
+				c.serverStatusMu.Lock()
+				defer c.serverStatusMu.Unlock()
+				c.serverStatus.Token[options.User] = tkn
+			}()
 		}
 
 		var pods corev1.PodList
@@ -322,7 +329,12 @@ func (c *ComponentAPI) GitpodServer(opts ...GitpodServerOpt) (gitpod.APIInterfac
 			return err
 		}
 
-		c.serverStatus.Client[options.User] = cl
+		func() {
+			c.serverStatusMu.Lock()
+			defer c.serverStatusMu.Unlock()
+			c.serverStatus.Client[options.User] = cl
+		}()
+
 		res = cl
 		c.appendCloser(cl.Close)
 
@@ -471,13 +483,14 @@ func (c *ComponentAPI) CreateUser(username string, token string) (string, error)
 		}
 
 		userId = userUuid.String()
-		_, err = db.Exec(`INSERT IGNORE INTO d_b_user (id, creationDate, avatarUrl, name, fullName, featureFlags) VALUES (?, ?, ?, ?, ?, ?)`,
+		_, err = db.Exec(`INSERT IGNORE INTO d_b_user (id, creationDate, avatarUrl, name, fullName, featureFlags, lastVerificationTime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			userId,
 			time.Now().Format(time.RFC3339),
 			"",
 			username,
 			username,
 			"{\"permanentWSFeatureFlags\":[]}",
+			time.Now().Format(time.RFC3339),
 		)
 		if err != nil {
 			return "", err
@@ -485,7 +498,7 @@ func (c *ComponentAPI) CreateUser(username string, token string) (string, error)
 	}
 
 	var authId string
-	err = db.QueryRow(`SELECT authId FROM d_b_identity WHERE userId = ? and deleted != 1`, userId).Scan(&authId)
+	err = db.QueryRow(`SELECT authId FROM d_b_identity WHERE userId = ?`, userId).Scan(&authId)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
@@ -503,7 +516,7 @@ func (c *ComponentAPI) CreateUser(username string, token string) (string, error)
 	}
 
 	var cnt int
-	err = db.QueryRow(`SELECT COUNT(1) AS cnt FROM d_b_token_entry WHERE authId = ? and deleted != 1`, authId).Scan(&cnt)
+	err = db.QueryRow(`SELECT COUNT(1) AS cnt FROM d_b_token_entry WHERE authId = ?`, authId).Scan(&cnt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
@@ -795,7 +808,7 @@ var (
 	// cachedDBs caches DB connections per database name, so we don't have to re-establish connections all the time,
 	// saving us a lot of time in integration tests.
 	// The cache gets cleaned up when the component is closed.
-	cachedDBs = make(map[string]*sql.DB)
+	cachedDBs = sync.Map{}
 )
 
 // DB provides access to the Gitpod database.
@@ -808,8 +821,9 @@ func (c *ComponentAPI) DB(options ...DBOpt) (*sql.DB, error) {
 		o(&opts)
 	}
 
-	if db, ok := cachedDBs[opts.Database]; ok {
-		return db, nil
+	if db, ok := cachedDBs.Load(opts.Database); ok {
+		actualDb := db.(*sql.DB)
+		return actualDb, nil
 	}
 
 	config, err := c.findDBConfig()
@@ -836,9 +850,9 @@ func (c *ComponentAPI) DB(options ...DBOpt) (*sql.DB, error) {
 	// to getting an idle connection from the pool which has for some reason been closed.
 	db.SetMaxIdleConns(0)
 
-	cachedDBs[opts.Database] = db
+	cachedDBs.Store(opts.Database, db)
 	c.appendCloser(func() error {
-		delete(cachedDBs, opts.Database)
+		cachedDBs.Delete(opts.Database)
 		return db.Close()
 	})
 	return db, nil

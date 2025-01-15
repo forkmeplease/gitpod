@@ -7106,7 +7106,7 @@ public final class Info {
   static {
     java.lang.String[] descriptorData = {
       "\n\ninfo.proto\022\nsupervisor\032\034google/api/ann" +
-      "otations.proto\"\026\n\024WorkspaceInfoRequest\"\270" +
+      "otations.proto\"\026\n\024WorkspaceInfoRequest\"\276" +
       "\006\n\025WorkspaceInfoResponse\022\024\n\014workspace_id" +
       "\030\001 \001(\t\022\023\n\013instance_id\030\002 \001(\t\022\031\n\021checkout_" +
       "location\030\003 \001(\t\022!\n\027workspace_location_fil" +
@@ -7127,14 +7127,14 @@ public final class Info {
       "t\030\002 \001(\t\032)\n\nRepository\022\r\n\005owner\030\001 \001(\t\022\014\n\004" +
       "name\030\002 \001(\t\032G\n\016WorkspaceClass\022\n\n\002id\030\001 \001(\t" +
       "\022\024\n\014display_name\030\002 \001(\t\022\023\n\013description\030\003 " +
-      "\001(\tB\024\n\022workspace_location*<\n\022DebugWorksp" +
-      "aceType\022\013\n\007noDebug\020\000\022\013\n\007regular\020\001\022\014\n\010pre" +
-      "build\020\0022\177\n\013InfoService\022p\n\rWorkspaceInfo\022" +
-      " .supervisor.WorkspaceInfoRequest\032!.supe" +
-      "rvisor.WorkspaceInfoResponse\"\032\202\323\344\223\002\024\022\022/v" +
-      "1/info/workspaceBF\n\030io.gitpod.supervisor" +
-      ".apiZ*github.com/gitpod-io/gitpod/superv" +
-      "isor/apib\006proto3"
+      "\001(\tB\024\n\022workspace_locationJ\004\010\023\020\024*<\n\022Debug" +
+      "WorkspaceType\022\013\n\007noDebug\020\000\022\013\n\007regular\020\001\022" +
+      "\014\n\010prebuild\020\0022\177\n\013InfoService\022p\n\rWorkspac" +
+      "eInfo\022 .supervisor.WorkspaceInfoRequest\032" +
+      "!.supervisor.WorkspaceInfoResponse\"\032\202\323\344\223" +
+      "\002\024\022\022/v1/info/workspaceBF\n\030io.gitpod.supe" +
+      "rvisor.apiZ*github.com/gitpod-io/gitpod/" +
+      "supervisor/apib\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,

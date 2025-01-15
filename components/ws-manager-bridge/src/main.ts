@@ -8,6 +8,7 @@ import { Container } from "inversify";
 import * as express from "express";
 import * as prometheusClient from "prom-client";
 import { log, LogrusLogLevel } from "@gitpod/gitpod-protocol/lib/util/logging";
+import { installLogCountMetric } from "@gitpod/gitpod-protocol/lib/util/logging-node";
 import { DebugApp } from "@gitpod/gitpod-protocol/lib/util/debug-app";
 import { TypeORM } from "@gitpod/gitpod-db/lib/typeorm/typeorm";
 import { TracingManager } from "@gitpod/gitpod-protocol/lib/util/tracing";
@@ -15,8 +16,10 @@ import { ClusterServiceServer } from "./cluster-service-server";
 import { BridgeController } from "./bridge-controller";
 import { AppClusterWorkspaceInstancesController } from "./app-cluster-instance-controller";
 import { redisMetricsRegistry } from "@gitpod/gitpod-db/lib";
+import { health, startHealthEndpoint } from "./healthz";
 
 log.enableJSONLogging("ws-manager-bridge", undefined, LogrusLogLevel.getFromEnv());
+installLogCountMetric();
 
 export const start = async (container: Container) => {
     process.on("uncaughtException", function (err) {
@@ -29,6 +32,7 @@ export const start = async (container: Container) => {
     });
 
     try {
+        startHealthEndpoint();
         const db = container.get(TypeORM);
         await db.connect();
 
@@ -77,9 +81,11 @@ export const start = async (container: Container) => {
             appClusterInstanceController.dispose();
         });
         log.info("ws-manager-bridge is up and running");
+        health.isHealthy = true;
         await new Promise((rs, rj) => {});
     } catch (err) {
         log.error("Error during startup. Exiting.", err);
+        health.isHealthy = false;
         process.exit(1);
     }
 };

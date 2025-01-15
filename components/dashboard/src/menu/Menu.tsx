@@ -4,7 +4,6 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
-import { User } from "@gitpod/gitpod-protocol";
 import { FC, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { Location } from "history";
@@ -20,6 +19,9 @@ import { isGitpodIo } from "../utils";
 import OrganizationSelector from "./OrganizationSelector";
 import { getAdminTabs } from "../admin/admin.routes";
 import classNames from "classnames";
+import { User, RoleOrPermission } from "@gitpod/public-api/lib/gitpod/v1/user_pb";
+import { getPrimaryEmail } from "@gitpod/public-api-common/lib/user-utils";
+import { ConfigurationsMigrationCoachmark } from "../repositories/coachmarks/MigrationCoachmark";
 
 interface Entry {
     title: string;
@@ -71,8 +73,10 @@ export default function Menu() {
             <header className="app-container flex flex-col pt-4" data-analytics='{"button_type":"menu"}'>
                 <div className="flex justify-between h-10 mb-3 w-full">
                     <div className="flex items-center">
-                        <OrganizationSelector />
-                        {/* hidden on smaller screens (in it's own menu below on smaller screens) */}
+                        <ConfigurationsMigrationCoachmark>
+                            <OrganizationSelector />
+                        </ConfigurationsMigrationCoachmark>
+                        {/* hidden on smaller screens (in its own menu below on smaller screens) */}
                         <div className="hidden md:block pl-2">
                             <OrgPagesNav />
                         </div>
@@ -82,7 +86,7 @@ export default function Menu() {
                         <nav className="hidden md:block flex-1">
                             <ul className="flex flex-1 items-center justify-between text-base text-gray-500 dark:text-gray-400 space-x-2">
                                 <li className="flex-1"></li>
-                                {user?.rolesOrPermissions?.includes("admin") && (
+                                {user?.rolesOrPermissions?.includes(RoleOrPermission.ADMIN) && (
                                     <li className="cursor-pointer">
                                         <PillMenuItem
                                             name="Admin"
@@ -121,27 +125,19 @@ export default function Menu() {
     );
 }
 
+const leftMenu: Entry[] = [
+    {
+        title: "Workspaces",
+        link: "/workspaces",
+        alternatives: ["/"],
+    },
+];
+
 type OrgPagesNavProps = {
     className?: string;
 };
 const OrgPagesNav: FC<OrgPagesNavProps> = ({ className }) => {
     const location = useLocation();
-
-    const leftMenu: Entry[] = useMemo(
-        () => [
-            {
-                title: "Workspaces",
-                link: "/workspaces",
-                alternatives: ["/"],
-            },
-            {
-                title: "Projects",
-                link: `/projects`,
-                alternatives: [] as string[],
-            },
-        ],
-        [],
-    );
 
     return (
         <div
@@ -170,7 +166,7 @@ const UserMenu: FC<UserMenuProps> = ({ user, className, withAdminLink, withFeedb
     const extraSection = useMemo(() => {
         const items: ContextMenuEntry[] = [];
 
-        if (withAdminLink && user?.rolesOrPermissions?.includes("admin")) {
+        if (withAdminLink && user?.rolesOrPermissions?.includes(RoleOrPermission.ADMIN)) {
             items.push({
                 title: "Admin",
                 link: "/admin",
@@ -191,6 +187,38 @@ const UserMenu: FC<UserMenuProps> = ({ user, className, withAdminLink, withFeedb
         return items;
     }, [onFeedback, user?.rolesOrPermissions, withAdminLink, withFeedbackLink]);
 
+    const menuEntries = useMemo(() => {
+        return [
+            {
+                title: (user && (getPrimaryEmail(user) || user?.name)) || "User",
+                customFontStyle: "text-gray-400",
+                separator: true,
+            },
+            {
+                title: "User Settings",
+                link: "/user/settings",
+            },
+            {
+                title: "Docs",
+                href: "https://www.gitpod.io/docs/introduction",
+                target: "_blank",
+                rel: "noreferrer",
+            },
+            {
+                title: "Help",
+                href: "https://www.gitpod.io/support/",
+                target: "_blank",
+                rel: "noreferrer",
+                separator: true,
+            },
+            ...extraSection,
+            {
+                title: "Log out",
+                href: gitpodHostUrl.asApiLogout().toString(),
+            },
+        ];
+    }, [extraSection, user]);
+
     return (
         <div
             className={classNames(
@@ -199,37 +227,7 @@ const UserMenu: FC<UserMenuProps> = ({ user, className, withAdminLink, withFeedb
             )}
             data-analytics='{"label":"Account"}'
         >
-            <ContextMenu
-                menuEntries={[
-                    {
-                        title: (user && (User.getPrimaryEmail(user) || user?.name)) || "User",
-                        customFontStyle: "text-gray-400",
-                        separator: true,
-                    },
-                    {
-                        title: "User Settings",
-                        link: "/user/settings",
-                    },
-                    {
-                        title: "Docs",
-                        href: "https://www.gitpod.io/docs/",
-                        target: "_blank",
-                        rel: "noreferrer",
-                    },
-                    {
-                        title: "Help",
-                        href: "https://www.gitpod.io/support/",
-                        target: "_blank",
-                        rel: "noreferrer",
-                        separator: true,
-                    },
-                    ...extraSection,
-                    {
-                        title: "Log out",
-                        href: gitpodHostUrl.asApiLogout().toString(),
-                    },
-                ]}
-            >
+            <ContextMenu menuEntries={menuEntries}>
                 <img className="rounded-full w-8 h-8" src={user?.avatarUrl || ""} alt={user?.name || "Anonymous"} />
             </ContextMenu>
         </div>

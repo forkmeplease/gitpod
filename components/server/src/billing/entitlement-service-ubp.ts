@@ -4,7 +4,6 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
-import { TeamDB } from "@gitpod/gitpod-db/lib";
 import {
     WorkspaceInstance,
     WorkspaceTimeoutDuration,
@@ -14,16 +13,20 @@ import {
     WORKSPACE_LIFETIME_SHORT,
     User,
     BillingTier,
-    Team,
+    MAX_PARALLEL_WORKSPACES_PAID,
+    MAX_PARALLEL_WORKSPACES_FREE,
 } from "@gitpod/gitpod-protocol";
 import { AttributionId } from "@gitpod/gitpod-protocol/lib/attribution";
 import { inject, injectable } from "inversify";
 import { EntitlementService, HitParallelWorkspaceLimit, MayStartWorkspaceResult } from "./entitlement-service";
 import { CostCenter_BillingStrategy } from "@gitpod/usage-api/lib/usage/v1/usage.pb";
 import { UsageService } from "../orgs/usage-service";
+import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
+import { VerificationService } from "../auth/verification-service";
+import type { OrganizationService } from "../orgs/organization-service";
 
-const MAX_PARALLEL_WORKSPACES_FREE = 4;
-const MAX_PARALLEL_WORKSPACES_PAID = 16;
+export const LazyOrganizationService = Symbol("LazyOrganizationService");
+export type LazyOrganizationService = () => OrganizationService;
 
 /**
  * EntitlementService implementation for Usage-Based Pricing (UBP)
@@ -32,7 +35,8 @@ const MAX_PARALLEL_WORKSPACES_PAID = 16;
 export class EntitlementServiceUBP implements EntitlementService {
     constructor(
         @inject(UsageService) private readonly usageService: UsageService,
-        @inject(TeamDB) private readonly teamDB: TeamDB,
+        @inject(VerificationService) private readonly verificationService: VerificationService,
+        @inject(LazyOrganizationService) private readonly organizationService: LazyOrganizationService,
     ) {}
 
     async mayStartWorkspace(
@@ -40,9 +44,24 @@ export class EntitlementServiceUBP implements EntitlementService {
         organizationId: string,
         runningInstances: Promise<WorkspaceInstance[]>,
     ): Promise<MayStartWorkspaceResult> {
+        const verification = await this.verificationService.needsVerification(user);
+        if (verification) {
+            return {
+                needsVerification: true,
+            };
+        }
+
         const hasHitParallelWorkspaceLimit = async (): Promise<HitParallelWorkspaceLimit | undefined> => {
-            const max = await this.getMaxParallelWorkspaces(user.id, organizationId);
-            const current = (await runningInstances).filter((i) => i.status.phase !== "preparing").length;
+            const { maxParallelRunningWorkspaces } = await this.organizationService().getSettings(
+                user.id,
+                organizationId,
+            );
+            const planAllowance = await this.getMaxParallelWorkspaces(user.id, organizationId);
+            const max = maxParallelRunningWorkspaces
+                ? Math.min(planAllowance, maxParallelRunningWorkspaces)
+                : planAllowance;
+
+            const current = await getRunningInstancesCount(runningInstances);
             if (current >= max) {
                 return {
                     current,
@@ -70,7 +89,7 @@ export class EntitlementServiceUBP implements EntitlementService {
         return undefined;
     }
 
-    private async getMaxParallelWorkspaces(userId: string, organizationId: string): Promise<number> {
+    async getMaxParallelWorkspaces(userId: string, organizationId: string): Promise<number> {
         if (await this.hasPaidSubscription(userId, organizationId)) {
             return MAX_PARALLEL_WORKSPACES_PAID;
         } else {
@@ -78,7 +97,7 @@ export class EntitlementServiceUBP implements EntitlementService {
         }
     }
 
-    async maySetTimeout(userId: string, organizationId?: string): Promise<boolean> {
+    async maySetTimeout(userId: string, organizationId: string): Promise<boolean> {
         return this.hasPaidSubscription(userId, organizationId);
     }
 
@@ -108,36 +127,15 @@ export class EntitlementServiceUBP implements EntitlementService {
         return true;
     }
 
-    private async hasPaidSubscription(userId: string, organizationId?: string): Promise<boolean> {
-        if (organizationId) {
+    private async hasPaidSubscription(userId: string, organizationId: string): Promise<boolean> {
+        try {
             // This is the "stricter", more correct version: We only allow privileges on the Organization that is paying for it
             const { billingStrategy } = await this.usageService.getCostCenter(userId, organizationId);
             return billingStrategy === CostCenter_BillingStrategy.BILLING_STRATEGY_STRIPE;
+        } catch (err) {
+            log.warn({ userId, organizationId }, "Error checking if user is subscribed to organization", err);
+            return false;
         }
-        // This is the old behavior, stemming from our transition to PAYF, where our API did-/doesn't pass organizationId, yet
-        // Member of paid team?
-        const teams = await this.teamDB.findTeamsByUser(userId);
-        const isTeamSubscribedPromises = teams.map(async (team: Team) => {
-            const { billingStrategy } = await this.usageService.getCostCenter(userId, team.id);
-            return billingStrategy === CostCenter_BillingStrategy.BILLING_STRATEGY_STRIPE;
-        });
-        // Return the first truthy promise, or false if all the promises were falsy.
-        // Source: https://gist.github.com/jbreckmckye/66364021ebaa0785e426deec0410a235
-        return new Promise((resolve, reject) => {
-            // If any promise returns true, immediately resolve with true
-            isTeamSubscribedPromises.forEach(async (isTeamSubscribedPromise: Promise<boolean>) => {
-                const isTeamSubscribed = await isTeamSubscribedPromise;
-                if (isTeamSubscribed) resolve(true);
-            });
-
-            // If neither of the above fires, resolve with false
-            // Check truthiness just in case callbacks fire out-of-band
-            Promise.all(isTeamSubscribedPromises)
-                .then((areTeamsSubscribed) => {
-                    resolve(!!areTeamsSubscribed.find((isTeamSubscribed: boolean) => !!isTeamSubscribed));
-                })
-                .catch(reject);
-        });
     }
 
     async getBillingTier(userId: string, organizationId: string): Promise<BillingTier> {
@@ -145,3 +143,8 @@ export class EntitlementServiceUBP implements EntitlementService {
         return hasPaidPlan ? "paid" : "free";
     }
 }
+
+export const getRunningInstancesCount = async (instancesPromise: Promise<WorkspaceInstance[]>): Promise<number> => {
+    const instances = await instancesPromise;
+    return instances.filter((i) => i.status.phase !== "preparing").length;
+};
