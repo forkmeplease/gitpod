@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2023 Gitpod GmbH. All rights reserved.
+ * Copyright (c) 2024 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
  * See License.AGPL.txt in the project root for license information.
  */
@@ -699,12 +699,8 @@ export namespace WorkspaceStatus {
 export class IDEImage extends jspb.Message {
     getWebRef(): string;
     setWebRef(value: string): IDEImage;
-    getDesktopRef(): string;
-    setDesktopRef(value: string): IDEImage;
     getSupervisorRef(): string;
     setSupervisorRef(value: string): IDEImage;
-    getDesktopPluginRef(): string;
-    setDesktopPluginRef(value: string): IDEImage;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): IDEImage.AsObject;
@@ -719,17 +715,13 @@ export class IDEImage extends jspb.Message {
 export namespace IDEImage {
     export type AsObject = {
         webRef: string,
-        desktopRef: string,
         supervisorRef: string,
-        desktopPluginRef: string,
     }
 }
 
 export class WorkspaceSpec extends jspb.Message {
     getWorkspaceImage(): string;
     setWorkspaceImage(value: string): WorkspaceSpec;
-    getDeprecatedIdeImage(): string;
-    setDeprecatedIdeImage(value: string): WorkspaceSpec;
     getHeadless(): boolean;
     setHeadless(value: boolean): WorkspaceSpec;
     getUrl(): string;
@@ -769,7 +761,6 @@ export class WorkspaceSpec extends jspb.Message {
 export namespace WorkspaceSpec {
     export type AsObject = {
         workspaceImage: string,
-        deprecatedIdeImage: string,
         headless: boolean,
         url: string,
         exposedPortsList: Array<PortSpec.AsObject>,
@@ -917,6 +908,11 @@ export class WorkspaceMetadata extends jspb.Message {
     getProject(): string | undefined;
     setProject(value: string): WorkspaceMetadata;
 
+    hasMetrics(): boolean;
+    clearMetrics(): void;
+    getMetrics(): WorkspaceMetadata.Metrics | undefined;
+    setMetrics(value?: WorkspaceMetadata.Metrics): WorkspaceMetadata;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): WorkspaceMetadata.AsObject;
     static toObject(includeInstance: boolean, msg: WorkspaceMetadata): WorkspaceMetadata.AsObject;
@@ -936,7 +932,56 @@ export namespace WorkspaceMetadata {
         annotationsMap: Array<[string, string]>,
         team?: string,
         project?: string,
+        metrics?: WorkspaceMetadata.Metrics.AsObject,
     }
+
+
+    export class ImageInfo extends jspb.Message {
+        getTotalSize(): number;
+        setTotalSize(value: number): ImageInfo;
+        getWorkspaceImageSize(): number;
+        setWorkspaceImageSize(value: number): ImageInfo;
+
+        serializeBinary(): Uint8Array;
+        toObject(includeInstance?: boolean): ImageInfo.AsObject;
+        static toObject(includeInstance: boolean, msg: ImageInfo): ImageInfo.AsObject;
+        static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+        static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+        static serializeBinaryToWriter(message: ImageInfo, writer: jspb.BinaryWriter): void;
+        static deserializeBinary(bytes: Uint8Array): ImageInfo;
+        static deserializeBinaryFromReader(message: ImageInfo, reader: jspb.BinaryReader): ImageInfo;
+    }
+
+    export namespace ImageInfo {
+        export type AsObject = {
+            totalSize: number,
+            workspaceImageSize: number,
+        }
+    }
+
+    export class Metrics extends jspb.Message {
+
+        hasImage(): boolean;
+        clearImage(): void;
+        getImage(): WorkspaceMetadata.ImageInfo | undefined;
+        setImage(value?: WorkspaceMetadata.ImageInfo): Metrics;
+
+        serializeBinary(): Uint8Array;
+        toObject(includeInstance?: boolean): Metrics.AsObject;
+        static toObject(includeInstance: boolean, msg: Metrics): Metrics.AsObject;
+        static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+        static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+        static serializeBinaryToWriter(message: Metrics, writer: jspb.BinaryWriter): void;
+        static deserializeBinary(bytes: Uint8Array): Metrics;
+        static deserializeBinaryFromReader(message: Metrics, reader: jspb.BinaryReader): Metrics;
+    }
+
+    export namespace Metrics {
+        export type AsObject = {
+            image?: WorkspaceMetadata.ImageInfo.AsObject,
+        }
+    }
+
 }
 
 export class WorkspaceRuntimeInfo extends jspb.Message {
@@ -991,8 +1036,6 @@ export namespace WorkspaceAuthentication {
 export class StartWorkspaceSpec extends jspb.Message {
     getWorkspaceImage(): string;
     setWorkspaceImage(value: string): StartWorkspaceSpec;
-    getDeprecatedIdeImage(): string;
-    setDeprecatedIdeImage(value: string): StartWorkspaceSpec;
     clearFeatureFlagsList(): void;
     getFeatureFlagsList(): Array<WorkspaceFeatureFlag>;
     setFeatureFlagsList(value: Array<WorkspaceFeatureFlag>): StartWorkspaceSpec;
@@ -1058,7 +1101,6 @@ export class StartWorkspaceSpec extends jspb.Message {
 export namespace StartWorkspaceSpec {
     export type AsObject = {
         workspaceImage: string,
-        deprecatedIdeImage: string,
         featureFlagsList: Array<WorkspaceFeatureFlag>,
         initializer?: content_service_api_initializer_pb.WorkspaceInitializer.AsObject,
         portsList: Array<PortSpec.AsObject>,
@@ -1216,10 +1258,12 @@ export namespace DescribeClusterRequest {
 }
 
 export class DescribeClusterResponse extends jspb.Message {
-    clearWorkspaceclassesList(): void;
-    getWorkspaceclassesList(): Array<WorkspaceClass>;
-    setWorkspaceclassesList(value: Array<WorkspaceClass>): DescribeClusterResponse;
-    addWorkspaceclasses(value?: WorkspaceClass, index?: number): WorkspaceClass;
+    clearWorkspaceClassesList(): void;
+    getWorkspaceClassesList(): Array<WorkspaceClass>;
+    setWorkspaceClassesList(value: Array<WorkspaceClass>): DescribeClusterResponse;
+    addWorkspaceClasses(value?: WorkspaceClass, index?: number): WorkspaceClass;
+    getPreferredWorkspaceClass(): string;
+    setPreferredWorkspaceClass(value: string): DescribeClusterResponse;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): DescribeClusterResponse.AsObject;
@@ -1233,15 +1277,20 @@ export class DescribeClusterResponse extends jspb.Message {
 
 export namespace DescribeClusterResponse {
     export type AsObject = {
-        workspaceclassesList: Array<WorkspaceClass.AsObject>,
+        workspaceClassesList: Array<WorkspaceClass.AsObject>,
+        preferredWorkspaceClass: string,
     }
 }
 
 export class WorkspaceClass extends jspb.Message {
     getId(): string;
     setId(value: string): WorkspaceClass;
-    getDisplayname(): string;
-    setDisplayname(value: string): WorkspaceClass;
+    getDisplayName(): string;
+    setDisplayName(value: string): WorkspaceClass;
+    getDescription(): string;
+    setDescription(value: string): WorkspaceClass;
+    getCreditsPerMinute(): number;
+    setCreditsPerMinute(value: number): WorkspaceClass;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): WorkspaceClass.AsObject;
@@ -1256,7 +1305,9 @@ export class WorkspaceClass extends jspb.Message {
 export namespace WorkspaceClass {
     export type AsObject = {
         id: string,
-        displayname: string,
+        displayName: string,
+        description: string,
+        creditsPerMinute: number,
     }
 }
 
@@ -1307,6 +1358,7 @@ export enum WorkspaceFeatureFlag {
     NOOP = 0,
     WORKSPACE_CONNECTION_LIMITING = 10,
     WORKSPACE_PSI = 11,
+    SSH_CA = 12,
 }
 
 export enum WorkspaceType {

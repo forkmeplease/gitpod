@@ -4,7 +4,8 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
-import { NamedWorkspaceFeatureFlag } from "./protocol";
+import { EnvVar, NamedWorkspaceFeatureFlag, TaskConfig } from "./protocol";
+import { WorkspaceRegion } from "./workspace-cluster";
 
 // WorkspaceInstance describes a part of a workspace's lifetime, specifically a single running session of it
 export interface WorkspaceInstance {
@@ -30,15 +31,15 @@ export interface WorkspaceInstance {
     stoppedTime?: string;
 
     // ideUrl is the URL at which the workspace is available on the internet
-    // Note: this is nitially empty, filled during starting process!
+    // Note: this is initially empty, filled during starting process!
     ideUrl: string;
 
     // region is the name of the workspace cluster this instance runs in
-    // Note: this is nitially empty, filled during starting process!
+    // Note: this is initially empty, filled during starting process!
     region: string;
 
     // workspaceImage is the name of the Docker image this instance runs
-    // Note: this is nitially empty, filled during starting process!
+    // Note: this is initially empty, filled during starting process!
     workspaceImage: string;
 
     // status is the latest status of the instance that we're aware of
@@ -48,9 +49,7 @@ export interface WorkspaceInstance {
     gitStatus?: WorkspaceInstanceRepoStatus;
 
     // configuration captures the per-instance configuration variance of a workspace
-    // Beware: this field was added retroactively and not all instances have valid
-    //         values here.
-    configuration?: WorkspaceInstanceConfiguration;
+    configuration: WorkspaceInstanceConfiguration;
 
     // instance is hard-deleted on the database and about to be collected by periodic deleter
     readonly deleted?: boolean;
@@ -76,7 +75,7 @@ export interface WorkspaceInstance {
 // WorkspaceInstanceStatus describes the current state of a workspace instance
 export interface WorkspaceInstanceStatus {
     // version is the current version of the workspace instance status
-    // Note: consider this value opague. The only guarantee given is that it imposes
+    // Note: consider this value opaque. The only guarantee given is that it imposes
     //       a partial order on status updates, i.e. a.version > b.version -> a newer than b.
     version?: number;
 
@@ -92,14 +91,6 @@ export interface WorkspaceInstanceStatus {
     // exposedPorts is the list of currently exposed ports
     exposedPorts?: WorkspaceInstancePort[];
 
-    /**
-     * repo contains information about the Git working copy inside the workspace
-     * @deprecated use WorkspaceInstance.gitStatus instead if supervisor_live_git_status feature flag is enabled
-     *
-     * TODO(ak) remove after migration to live git status
-     */
-    repo?: WorkspaceInstanceRepoStatus;
-
     // timeout is a non-default timeout value configured for a workspace
     timeout?: string;
 
@@ -114,6 +105,9 @@ export interface WorkspaceInstanceStatus {
 
     // ownerToken is the token one needs to access the workspace. Its presence is checked by ws-proxy.
     ownerToken?: string;
+
+    // metrics contains metrics about the workspace instance
+    metrics?: WorkspaceInstanceMetrics;
 }
 
 // WorkspaceInstancePhase describes a high-level state of a workspace instance
@@ -131,11 +125,11 @@ export type WorkspaceInstancePhase =
     | "building"
 
     // Pending means the workspace does not yet consume resources in the cluster, but rather is looking for
-    // some space within the cluster. If for example the cluster needs to scale up to accomodate the
+    // some space within the cluster. If for example the cluster needs to scale up to accommodate the
     // workspace, the workspace will be in Pending state until that happened.
     | "pending"
 
-    // Creating means the workspace is currently being created. Thati includes downloading the images required
+    // Creating means the workspace is currently being created. That includes downloading the images required
     // to run the workspace over the network. The time spent in this phase varies widely and depends on the current
     // network speed, image size and cache states.
     | "creating"
@@ -202,7 +196,7 @@ export interface WorkspaceInstancePort {
     // The outward-facing port number
     port: number;
 
-    // The visiblity of this port. Optional for backwards compatibility.
+    // The visibility of this port. Optional for backwards compatibility.
     visibility?: PortVisibility;
 
     // Public, outward-facing URL where the port can be accessed on.
@@ -278,12 +272,18 @@ export namespace WorkspaceInstanceRepoStatus {
 export interface ConfigurationIdeConfig {
     useLatest?: boolean;
     ide?: string;
+    preferToolbox?: boolean;
+}
+
+export interface IdeSetup {
+    tasks?: TaskConfig[];
+    envvars?: EnvVar[];
 }
 
 // WorkspaceInstanceConfiguration contains all per-instance configuration
 export interface WorkspaceInstanceConfiguration {
     // theiaVersion is the version of Theia this workspace instance uses
-    // @deprected: replaced with the ideImage field
+    // @deprecated: replaced with the ideImage field
     theiaVersion?: string;
 
     // feature flags are the lowercase feature-flag names as passed to ws-manager
@@ -296,18 +296,21 @@ export interface WorkspaceInstanceConfiguration {
     // including ide-desktop, desktop-plugin and so on
     ideImageLayers?: string[];
 
-    // desktopIdeImage is the ref of the desktop IDE image this instance uses.
-    // @deprected: replaced with the ideImageLayers field
-    desktopIdeImage?: string;
-
-    // desktopIdePluginImage is the ref of the desktop IDE plugin image this instance uses.
-    // @deprected: replaced with the desktopIdePluginImage field
-    desktopIdePluginImage?: string;
-
     // supervisorImage is the ref of the supervisor image this instance uses.
     supervisorImage?: string;
 
+    // ideSetup contains all piece that are necessary to get the IDE running
+    // TODO(gpl) ideally also contains the fields above: ideImage, ideImageLayers and supervisorImage
+    ideSetup?: IdeSetup;
+
+    // ideConfig contains user-controlled IDE configuration
     ideConfig?: ConfigurationIdeConfig;
+
+    // The region the user passed as a preference for this workspace
+    regionPreference?: WorkspaceRegion;
+
+    // Whether this instance is started from a backup
+    fromBackup?: boolean;
 }
 
 /**
@@ -323,4 +326,20 @@ export interface ImageBuildInfo {
 export interface ImageBuildLogInfo {
     url: string;
     headers: { [key: string]: string };
+}
+
+/**
+ * Holds metrics about the workspace instance
+ */
+export interface WorkspaceInstanceMetrics {
+    image?: Partial<{
+        /**
+         * the total size of the image in bytes (includes Gitpod-specific layers like IDE)
+         */
+        totalSize: number;
+        /**
+         * the size of the workspace image in bytes
+         */
+        workspaceImageSize: number;
+    }>;
 }

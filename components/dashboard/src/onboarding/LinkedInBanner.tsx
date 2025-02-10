@@ -9,7 +9,7 @@ import classNames from "classnames";
 import { FC } from "react";
 import { useLinkedIn } from "react-linkedin-login-oauth2";
 import Alert from "../components/Alert";
-import { Button } from "../components/Button";
+import { Button } from "@podkit/buttons/Button";
 import SignInWithLinkedIn from "../images/sign-in-with-linkedin.svg";
 import { getGitpodService } from "../service/service";
 import { LinkedInProfile } from "@gitpod/gitpod-protocol";
@@ -64,7 +64,7 @@ export const LinkedInBanner: FC<Props> = ({ onSuccess }) => {
                 className={classNames(
                     "mt-6 p-6",
                     "border-2 border-dashed rounded-md space-y-4",
-                    "bg-gray-50 dark:bg-gray-800 dark:border-gray-600",
+                    "bg-pk-surface-secondary dark:border-gray-600",
                 )}
             >
                 <div className="flex items-center justify-center space-x-6">
@@ -76,15 +76,14 @@ export const LinkedInBanner: FC<Props> = ({ onSuccess }) => {
                     </p>
                 </div>
                 <Button
-                    size="block"
+                    className="gap-2 w-full"
                     onClick={(event) => {
                         event.preventDefault();
                         linkedInLogin();
                     }}
                     disabled={isLoading || !clientID}
-                    icon={<img src={SignInWithLinkedIn} width={20} height={20} alt="Sign in with Linked In" />}
                 >
-                    Connect with LinkedIn
+                    <img src={SignInWithLinkedIn} width={20} height={20} alt="" /> Connect with LinkedIn
                 </Button>
             </div>
             {/* TODO: Figure out if there's a different way we want to handle an error getting the clientID */}

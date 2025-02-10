@@ -36,8 +36,11 @@ func (v version) Factory() interface{} {
 	}
 }
 
+var (
+	defaultRepositoryUrl = config.GitpodContainerRegistry
+)
+
 const (
-	defaultRepositoryUrl  = "eu.gcr.io/gitpod-core-dev/build"
 	defaultOpenVSXURL     = "https://open-vsx.org"
 	defaultMetadataRegion = "local"
 )
@@ -121,9 +124,6 @@ type Config struct {
 
 	Database Database `json:"database" validate:"required"`
 
-	// Deprecated.
-	MessageBus *MessageBus `json:"messageBus,omitempty"`
-
 	ObjectStorage ObjectStorage `json:"objectStorage" validate:"required"`
 
 	ContainerRegistry ContainerRegistry `json:"containerRegistry" validate:"required"`
@@ -142,6 +142,8 @@ type Config struct {
 	BlockNewUsers BlockNewUsers `json:"blockNewUsers"`
 
 	SSHGatewayHostKey *ObjectRef `json:"sshGatewayHostKey,omitempty"`
+
+	SSHGatewayCAKey *ObjectRef `json:"sshGatewayCAKey,omitempty"`
 
 	DisableDefinitelyGP bool `json:"disableDefinitelyGp"`
 
@@ -186,17 +188,11 @@ type Tracing struct {
 	SecretName *string `json:"secretName,omitempty"`
 }
 
-type MessageBus struct {
-	Credentials *ObjectRef `json:"credentials"`
-}
-
 type Database struct {
 	InCluster *bool             `json:"inCluster,omitempty"`
 	External  *DatabaseExternal `json:"external,omitempty"`
 	CloudSQL  *DatabaseCloudSQL `json:"cloudSQL,omitempty"`
 	SSL       *SSLOptions       `json:"ssl,omitempty"`
-	// A temporary flag to help debug for the migration to MySQL 8.0
-	InClusterMysSQL_8_0 bool `json:"inClusterMySql_8_0,omitempty"`
 }
 
 type DatabaseExternal struct {
@@ -258,10 +254,14 @@ const (
 )
 
 type ContainerRegistry struct {
-	InCluster                 *bool                      `json:"inCluster,omitempty" validate:"required"`
-	External                  *ContainerRegistryExternal `json:"external,omitempty" validate:"required_if=InCluster false"`
-	S3Storage                 *S3Storage                 `json:"s3storage,omitempty"`
-	PrivateBaseImageAllowList []string                   `json:"privateBaseImageAllowList"`
+	InCluster *bool                      `json:"inCluster,omitempty" validate:"required"`
+	External  *ContainerRegistryExternal `json:"external,omitempty" validate:"required_if=InCluster false"`
+	S3Storage *S3Storage                 `json:"s3storage,omitempty"`
+
+	PrivateBaseImageAllowList []string `json:"privateBaseImageAllowList"`
+	EnableAdditionalECRAuth   bool     `json:"enableAdditionalECRAuth"`
+
+	SubassemblyBucket string `json:"subassemblyBucket"`
 }
 
 type ContainerRegistryExternal struct {
@@ -369,7 +369,6 @@ type Proxy struct {
 type FSShiftMethod string
 
 const (
-	FSShiftFuseFS  FSShiftMethod = "fuse"
 	FSShiftShiftFS FSShiftMethod = "shiftfs"
 )
 

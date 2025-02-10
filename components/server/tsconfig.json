@@ -1,5 +1,6 @@
 {
     "compilerOptions": {
+        "incremental": true,
         "outDir": "dist",
         "experimentalDecorators": true,
         "lib": [
@@ -20,6 +21,7 @@
         "declarationMap": true,
         "skipLibCheck": true,
         "useUnknownInCatchVariables": false,
+        "esModuleInterop": true,
         "typeRoots": [
             "./src/typings"
         ]

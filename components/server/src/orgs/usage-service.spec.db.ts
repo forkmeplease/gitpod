@@ -20,12 +20,13 @@ import * as chai from "chai";
 import { Container } from "inversify";
 import "mocha";
 import { Mock } from "../test/mocks/mock";
-import { createTestContainer } from "../test/service-testing-container-module";
+import { createTestContainer, withTestCtx } from "../test/service-testing-container-module";
 import { OrganizationService } from "./organization-service";
 import { UsageService } from "./usage-service";
 import { resetDB } from "@gitpod/gitpod-db/lib/test/reset-db";
 import { expectError } from "../test/expect-utils";
 import { UserService } from "../user/user-service";
+import { SYSTEM_USER } from "../authorization/authorizer";
 
 const expect = chai.expect;
 
@@ -43,9 +44,7 @@ describe("UsageService", async () => {
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         os = container.get(OrganizationService);
         const userService = container.get<UserService>(UserService);
         owner = await userService.createUser({
@@ -65,7 +64,7 @@ describe("UsageService", async () => {
                 authId: "1234",
             },
         });
-        await os.joinOrganization(member.id, invite.id);
+        await withTestCtx(SYSTEM_USER, () => os.joinOrganization(member.id, invite.id));
 
         stranger = await userService.createUser({
             identity: {
@@ -82,7 +81,12 @@ describe("UsageService", async () => {
                 authId: "1234",
             },
         });
-        await userService.setAdminRole(BUILTIN_INSTLLATION_ADMIN_USER_ID, admin.id, true);
+        await userService.updateRoleOrPermission(BUILTIN_INSTLLATION_ADMIN_USER_ID, admin.id, [
+            {
+                role: "admin",
+                add: true,
+            },
+        ]);
 
         us = container.get<UsageService>(UsageService);
         await us.getCostCenter(owner.id, org.id);
@@ -93,6 +97,8 @@ describe("UsageService", async () => {
         // Clean-up database
         const typeorm = container.get(TypeORM);
         await resetDB(typeorm);
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     it("getCostCenter permissions", async () => {

@@ -18,6 +18,7 @@ import (
 	"github.com/gitpod-io/gitpod/common-go/baseserver"
 	"github.com/gitpod-io/gitpod/installer/pkg/cluster"
 	"github.com/gitpod-io/gitpod/installer/pkg/common"
+	"github.com/gitpod-io/gitpod/installer/pkg/config/v1/experimental"
 )
 
 func statefulset(ctx *common.RenderContext) ([]runtime.Object, error) {
@@ -39,7 +40,7 @@ func statefulset(ctx *common.RenderContext) ([]runtime.Object, error) {
 				AccessModes: []v1.PersistentVolumeAccessMode{
 					v1.ReadWriteOnce,
 				},
-				Resources: v1.ResourceRequirements{
+				Resources: v1.VolumeResourceRequirements{
 					Requests: v1.ResourceList{
 						"storage": resource.MustParse("8Gi"),
 					},
@@ -65,6 +66,29 @@ func statefulset(ctx *common.RenderContext) ([]runtime.Object, error) {
 	}
 
 	const redisContainerName = "redis"
+
+	var proxyEnvVars []v1.EnvVar
+
+	_ = ctx.WithExperimental(func(cfg *experimental.Config) error {
+		proxyConfig := cfg.WebApp.ProxySettings
+		if proxyConfig != nil {
+			proxyEnvVars = []v1.EnvVar{
+				{
+					Name:  "HTTP_PROXY",
+					Value: proxyConfig.HttpProxy,
+				},
+				{
+					Name:  "HTTPS_PROXY",
+					Value: proxyConfig.HttpsProxy,
+				},
+				{
+					Name:  "NO_PROXY",
+					Value: proxyConfig.NoProxy,
+				},
+			}
+		}
+		return nil
+	})
 
 	return []runtime.Object{&appsv1.StatefulSet{
 		TypeMeta: common.TypeMetaStatefulSet,
@@ -136,6 +160,7 @@ func statefulset(ctx *common.RenderContext) ([]runtime.Object, error) {
 						Env: common.CustomizeEnvvar(ctx, Component, common.MergeEnv(
 							common.DefaultEnv(&ctx.Config),
 							common.ConfigcatEnv(ctx),
+							proxyEnvVars,
 						)),
 					}, {
 						Name:  redisContainerName,

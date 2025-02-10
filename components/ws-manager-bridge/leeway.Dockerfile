@@ -2,14 +2,13 @@
 # Licensed under the GNU Affero General Public License (AGPL).
 # See License.AGPL.txt in the project root for license information.
 
-FROM node:16.13.0-slim as builder
+FROM node:18.17.1-slim as builder
 COPY components-ws-manager-bridge--app /installer/
 
 WORKDIR /app
 RUN /installer/install.sh
 
-# NodeJS v16.19
-FROM cgr.dev/chainguard/node@sha256:95bb4763acb8e9702c956e093932be97ab118db410a0619bb3fdd334c9198006
+FROM cgr.dev/chainguard/node:18.17.1@sha256:af073516c203b6bd0b55a77a806a0950b486f2e9ea7387a32b0f41ea72f20886
 ENV NODE_OPTIONS=--unhandled-rejections=warn
 EXPOSE 3000
 COPY --from=builder --chown=node:node /app /app/

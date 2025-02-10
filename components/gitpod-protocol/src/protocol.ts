@@ -58,6 +58,9 @@ export interface User {
 
     // The phone number used for the last phone verification.
     verificationPhoneNumber?: string;
+
+    // The FGA relationships version of this user
+    fgaRelationshipsVersion?: number;
 }
 
 export namespace User {
@@ -68,177 +71,8 @@ export namespace User {
         return user.identities.find((id) => id.authProviderId === authProviderId);
     }
 
-    /**
-     * Returns a primary email address of a user.
-     *
-     * For accounts owned by an organization, it returns the email of the most recently used SSO identity.
-     *
-     * For personal accounts, first it looks for a email stored by the user, and falls back to any of the Git provider identities.
-     *
-     * @param user
-     * @returns A primaryEmail, or undefined.
-     */
-    export function getPrimaryEmail(user: User): string | undefined {
-        // If the accounts is owned by an organization, use the email of the most recently
-        // used SSO identity.
-        if (User.isOrganizationOwned(user)) {
-            const compareTime = (a?: string, b?: string) => (a || "").localeCompare(b || "");
-            const recentlyUsedSSOIdentity = user.identities
-                .sort((a, b) => compareTime(a.lastSigninTime, b.lastSigninTime))
-                // optimistically pick the most recent one
-                .reverse()[0];
-            return recentlyUsedSSOIdentity?.primaryEmail;
-        }
-
-        // In case of a personal account, check for the email stored by the user.
-        if (!isOrganizationOwned(user) && user.additionalData?.profile?.emailAddress) {
-            return user.additionalData?.profile?.emailAddress;
-        }
-
-        // Otherwise pick any
-        // FIXME(at) this is still not correct, as it doesn't distinguish between
-        // sign-in providers and additional Git hosters.
-        const identities = user.identities.filter((i) => !!i.primaryEmail);
-        if (identities.length <= 0) {
-            return undefined;
-        }
-
-        return identities[0].primaryEmail || undefined;
-    }
-
-    export function getName(user: User): string | undefined {
-        const name = user.fullName || user.name;
-        if (name) {
-            return name;
-        }
-
-        for (const id of user.identities) {
-            if (id.authName !== "") {
-                return id.authName;
-            }
-        }
-        return undefined;
-    }
-
-    export function hasPreferredIde(user: User) {
-        return (
-            typeof user?.additionalData?.ideSettings?.defaultIde !== "undefined" ||
-            typeof user?.additionalData?.ideSettings?.useLatestVersion !== "undefined"
-        );
-    }
-
-    export function isOnboardingUser(user: User) {
-        if (isOrganizationOwned(user)) {
-            return false;
-        }
-        // If a user has already been onboarded
-        // Also, used to rule out "admin-user"
-        if (!!user.additionalData?.profile?.onboardedTimestamp) {
-            return false;
-        }
-        return !hasPreferredIde(user);
-    }
-
     export function isOrganizationOwned(user: User) {
         return !!user.organizationId;
-    }
-
-    export function migrationIDESettings(user: User) {
-        if (
-            !user?.additionalData?.ideSettings ||
-            Object.keys(user.additionalData.ideSettings).length === 0 ||
-            user.additionalData.ideSettings.settingVersion === "2.0"
-        ) {
-            return;
-        }
-        const newIDESettings: IDESettings = {
-            settingVersion: "2.0",
-        };
-        const ideSettings = user.additionalData.ideSettings;
-        if (ideSettings.useDesktopIde) {
-            if (ideSettings.defaultDesktopIde === "code-desktop") {
-                newIDESettings.defaultIde = "code-desktop";
-            } else if (ideSettings.defaultDesktopIde === "code-desktop-insiders") {
-                newIDESettings.defaultIde = "code-desktop";
-                newIDESettings.useLatestVersion = true;
-            } else {
-                newIDESettings.defaultIde = ideSettings.defaultDesktopIde;
-                newIDESettings.useLatestVersion = ideSettings.useLatestVersion;
-            }
-        } else {
-            const useLatest = ideSettings.defaultIde === "code-latest";
-            newIDESettings.defaultIde = "code";
-            newIDESettings.useLatestVersion = useLatest;
-        }
-        user.additionalData.ideSettings = newIDESettings;
-    }
-
-    // TODO: make it more explicit that these field names are relied for our tracking purposes
-    // and decouple frontend from relying on them - instead use user.additionalData.profile object directly in FE
-    export function getProfile(user: User): Profile {
-        return {
-            name: User.getName(user!) || "",
-            email: User.getPrimaryEmail(user!) || "",
-            company: user?.additionalData?.profile?.companyName,
-            avatarURL: user?.avatarUrl,
-            jobRole: user?.additionalData?.profile?.jobRole,
-            jobRoleOther: user?.additionalData?.profile?.jobRoleOther,
-            explorationReasons: user?.additionalData?.profile?.explorationReasons,
-            signupGoals: user?.additionalData?.profile?.signupGoals,
-            signupGoalsOther: user?.additionalData?.profile?.signupGoalsOther,
-            companySize: user?.additionalData?.profile?.companySize,
-            onboardedTimestamp: user?.additionalData?.profile?.onboardedTimestamp,
-        };
-    }
-
-    export function setProfile(user: User, profile: Profile): User {
-        user.fullName = profile.name;
-        user.avatarUrl = profile.avatarURL;
-
-        if (!user.additionalData) {
-            user.additionalData = {};
-        }
-        if (!user.additionalData.profile) {
-            user.additionalData.profile = {};
-        }
-        user.additionalData.profile.emailAddress = profile.email;
-        user.additionalData.profile.companyName = profile.company;
-        user.additionalData.profile.lastUpdatedDetailsNudge = new Date().toISOString();
-
-        return user;
-    }
-
-    // TODO: refactor where this is referenced so it's more clearly tied to just analytics-tracking
-    // Let other places rely on the ProfileDetails type since that's what we store
-    // This is the profile data we send to our Segment analytics tracking pipeline
-    export interface Profile {
-        name: string;
-        email: string;
-        company?: string;
-        avatarURL?: string;
-        jobRole?: string;
-        jobRoleOther?: string;
-        explorationReasons?: string[];
-        signupGoals?: string[];
-        signupGoalsOther?: string;
-        onboardedTimestamp?: string;
-        companySize?: string;
-    }
-    export namespace Profile {
-        export function hasChanges(before: Profile, after: Profile) {
-            return (
-                before.name !== after.name ||
-                before.email !== after.email ||
-                before.company !== after.company ||
-                before.avatarURL !== after.avatarURL ||
-                before.jobRole !== after.jobRole ||
-                before.jobRoleOther !== after.jobRoleOther ||
-                // not checking explorationReasons or signupGoals atm as it's an array - need to check deep equality
-                before.signupGoalsOther !== after.signupGoalsOther ||
-                before.onboardedTimestamp !== after.onboardedTimestamp ||
-                before.companySize !== after.companySize
-            );
-        }
     }
 }
 
@@ -250,6 +84,7 @@ export interface WorkspaceTimeoutSetting {
 }
 
 export interface AdditionalUserData extends Partial<WorkspaceTimeoutSetting> {
+    /** @deprecated unused */
     platforms?: UserPlatform[];
     emailNotificationSettings?: EmailNotificationSettings;
     featurePreview?: boolean;
@@ -260,6 +95,7 @@ export interface AdditionalUserData extends Partial<WorkspaceTimeoutSetting> {
     // TODO(rl): provide a management UX to allow rescinding of approval
     oauthClientsApproved?: { [key: string]: string };
     // to remember GH Orgs the user installed/updated the GH App for
+    /** @deprecated unused */
     knownGitHubOrgs?: string[];
     // Git clone URL pointing to the user's dotfile repo
     dotfileRepo?: string;
@@ -267,14 +103,13 @@ export interface AdditionalUserData extends Partial<WorkspaceTimeoutSetting> {
     workspaceClasses?: WorkspaceClasses;
     // additional user profile data
     profile?: ProfileDetails;
+    /** @deprecated */
     shouldSeeMigrationMessage?: boolean;
-    // fgaRelationshipsVersion is the version of the spicedb relationships
-    fgaRelationshipsVersion?: number;
     // remembered workspace auto start options
     workspaceAutostartOptions?: WorkspaceAutostartOption[];
 }
 
-interface WorkspaceAutostartOption {
+export interface WorkspaceAutostartOption {
     cloneURL: string;
     organizationId: string;
     workspaceClass?: string;
@@ -297,10 +132,13 @@ export namespace AdditionalUserData {
         return user;
     }
 }
+
 // The format in which we store User Profiles in
 export interface ProfileDetails {
     // when was the last time the user updated their profile information or has been nudged to do so.
     lastUpdatedDetailsNudge?: string;
+    // when was the last time the user has accepted our privacy policy
+    acceptedPrivacyPolicyDate?: string;
     // the user's company name
     companyName?: string;
     // the user's email
@@ -319,6 +157,8 @@ export interface ProfileDetails {
     onboardedTimestamp?: string;
     // Onboarding question about a user's company size
     companySize?: string;
+    // key-value pairs of dialogs in the UI which should only appear once. The value usually is a timestamp of the last dismissal
+    coachmarksDismissals?: { [key: string]: string };
 }
 
 export interface EmailNotificationSettings {
@@ -331,6 +171,7 @@ export type IDESettings = {
     settingVersion?: string;
     defaultIde?: string;
     useLatestVersion?: boolean;
+    preferToolbox?: boolean;
     // DEPRECATED: Use defaultIde after `settingVersion: 2.0`, no more specialify desktop or browser.
     useDesktopIde?: boolean;
     // DEPRECATED: Same with useDesktopIde.
@@ -339,6 +180,9 @@ export type IDESettings = {
 
 export interface WorkspaceClasses {
     regular?: string;
+    /**
+     * @deprecated see Project.settings.prebuilds.workspaceClass
+     */
     prebuild?: string;
 }
 
@@ -379,6 +223,7 @@ export const WorkspaceFeatureFlags = {
     workspace_class_limiting: undefined,
     workspace_connection_limiting: undefined,
     workspace_psi: undefined,
+    ssh_ca: undefined,
 };
 export type NamedWorkspaceFeatureFlag = keyof typeof WorkspaceFeatureFlags;
 export namespace NamedWorkspaceFeatureFlag {
@@ -388,7 +233,7 @@ export namespace NamedWorkspaceFeatureFlag {
     }
 }
 
-export type EnvVar = UserEnvVar | ProjectEnvVarWithValue | EnvVarWithValue;
+export type EnvVar = UserEnvVar | ProjectEnvVarWithValue | OrgEnvVarWithValue | EnvVarWithValue;
 
 export interface EnvVarWithValue {
     name: string;
@@ -396,12 +241,24 @@ export interface EnvVarWithValue {
 }
 
 export interface ProjectEnvVarWithValue extends EnvVarWithValue {
-    id: string;
-    projectId: string;
+    id?: string;
+    /** If a project-scoped env var is "censored", it is only visible in Prebuilds */
     censored: boolean;
 }
 
-export type ProjectEnvVar = Omit<ProjectEnvVarWithValue, "value">;
+export interface ProjectEnvVar extends Omit<ProjectEnvVarWithValue, "value"> {
+    id: string;
+    projectId: string;
+}
+
+export interface OrgEnvVarWithValue extends EnvVarWithValue {
+    id?: string;
+}
+
+export interface OrgEnvVar extends Omit<OrgEnvVarWithValue, "value"> {
+    id: string;
+    orgId: string;
+}
 
 export interface UserEnvVarValue extends EnvVarWithValue {
     id?: string;
@@ -411,6 +268,18 @@ export interface UserEnvVar extends UserEnvVarValue {
     id: string;
     userId: string;
     deleted?: boolean;
+}
+
+export namespace EnvVar {
+    export const GITPOD_IMAGE_AUTH_ENV_VAR_NAME = "GITPOD_IMAGE_AUTH";
+    /**
+     * - GITPOD_IMAGE_AUTH is documented https://www.gitpod.io/docs/configure/workspaces/workspace-image#use-a-private-docker-image
+     */
+    export const WhiteListFromReserved = [GITPOD_IMAGE_AUTH_ENV_VAR_NAME];
+
+    export function is(data: any): data is EnvVar {
+        return data.hasOwnProperty("name") && data.hasOwnProperty("value");
+    }
 }
 
 export namespace UserEnvVar {
@@ -425,6 +294,15 @@ export namespace UserEnvVar {
         return c === WILDCARD_ASTERISK || c === WILDCARD_SHARP;
     }
 
+    export function is(data: any): data is UserEnvVar {
+        return (
+            EnvVar.is(data) &&
+            data.hasOwnProperty("id") &&
+            data.hasOwnProperty("userId") &&
+            data.hasOwnProperty("repositoryPattern")
+        );
+    }
+
     /**
      * @param variable
      * @returns Either a string containing an error message or undefined.
@@ -432,6 +310,9 @@ export namespace UserEnvVar {
     export function validate(variable: UserEnvVarValue): string | undefined {
         const name = variable.name;
         const pattern = variable.repositoryPattern;
+        if (!EnvVar.WhiteListFromReserved.includes(name) && name.startsWith("GITPOD_")) {
+            return "Name with prefix 'GITPOD_' is reserved.";
+        }
         if (name.trim() === "") {
             return "Name must not be empty.";
         }
@@ -677,9 +558,6 @@ export interface GitpodToken {
 
     /** Created timestamp */
     created: string;
-
-    // token is deleted on the database and about to be collected by periodic deleter
-    deleted?: boolean;
 }
 
 export enum GitpodTokenType {
@@ -712,7 +590,7 @@ export interface Identity {
     primaryEmail?: string;
     /** This is a flag that triggers the HARD DELETION of this entity */
     deleted?: boolean;
-    // The last time this entry was touched during a signin.
+    // The last time this entry was touched during a signin. It's only set for SSO identities.
     lastSigninTime?: string;
 
     // @deprecated as no longer in use since '19
@@ -737,6 +615,7 @@ export interface Token {
     scopes: string[];
     updateDate?: string;
     expiryDate?: string;
+    reservedUntilDate?: string;
     idToken?: string;
     refreshToken?: string;
     username?: string;
@@ -747,9 +626,8 @@ export interface TokenEntry {
     authId: string;
     token: Token;
     expiryDate?: string;
+    reservedUntilDate?: string;
     refreshable?: boolean;
-    /** This is a flag that triggers the HARD DELETION of this entity */
-    deleted?: boolean;
 }
 
 export interface EmailDomainFilterEntry {
@@ -843,6 +721,12 @@ export interface Workspace {
      */
     contentDeletedTime?: string;
 
+    /**
+     * The time when the workspace is eligible for soft deletion. This is the time when the workspace
+     * is marked as softDeleted earliest.
+     */
+    deletionEligibilityTime?: string;
+
     type: WorkspaceType;
 
     basedOnPrebuildId?: string;
@@ -852,23 +736,9 @@ export interface Workspace {
 
 export type WorkspaceSoftDeletion = "user" | "gc";
 
-export type WorkspaceType = "regular" | "prebuild";
+export type WorkspaceType = "regular" | "prebuild" | "imagebuild";
 
 export namespace Workspace {
-    export function getFullRepositoryName(ws: Workspace): string | undefined {
-        if (CommitContext.is(ws.context)) {
-            return ws.context.repository.owner + "/" + ws.context.repository.name;
-        }
-        return undefined;
-    }
-
-    export function getFullRepositoryUrl(ws: Workspace): string | undefined {
-        if (CommitContext.is(ws.context)) {
-            return `https://${ws.context.repository.host}/${getFullRepositoryName(ws)}`;
-        }
-        return undefined;
-    }
-
     export function getPullRequestNumber(ws: Workspace): number | undefined {
         if (PullRequestContext.is(ws.context)) {
             return ws.context.nr;
@@ -896,19 +766,26 @@ export namespace Workspace {
         }
         return undefined;
     }
+
+    const NAME_PREFIX = "named:";
+    export function fromWorkspaceName(name?: Workspace["description"]): string | undefined {
+        if (name?.startsWith(NAME_PREFIX)) {
+            return name.slice(NAME_PREFIX.length);
+        }
+        return undefined;
+    }
+    export function toWorkspaceName(name?: Workspace["description"]): string {
+        if (!name || name?.trim().length === 0) {
+            return "no-name";
+        }
+        return `${NAME_PREFIX}${name}`;
+    }
 }
 
 export interface GuessGitTokenScopesParams {
     host: string;
     repoUrl: string;
     gitCommand: string;
-    currentToken: GitToken;
-}
-
-export interface GitToken {
-    token: string;
-    user: string;
-    scopes: string[];
 }
 
 export interface GuessedGitTokenScopes {
@@ -929,6 +806,7 @@ export interface JetBrainsConfig {
     webstorm?: JetBrainsProductConfig;
     rider?: JetBrainsProductConfig;
     clion?: JetBrainsProductConfig;
+    rustrover?: JetBrainsProductConfig;
 }
 export interface JetBrainsProductConfig {
     prebuilds?: JetBrainsPrebuilds;
@@ -963,6 +841,7 @@ export interface WorkspaceConfig {
     jetbrains?: JetBrainsConfig;
     coreDump?: CoreDumpConfig;
     ideCredentials?: string;
+    env?: { [env: string]: any };
 
     /** deprecated. Enabled by default **/
     experimentalNetwork?: boolean;
@@ -971,12 +850,11 @@ export interface WorkspaceConfig {
      * Where the config object originates from.
      *
      * repo - from the repository
-     * definitly-gp - from github.com/gitpod-io/definitely-gp
      * derived - computed based on analyzing the repository
      * additional-content - config comes from additional content, usually provided through the project's configuration
      * default - our static catch-all default config
      */
-    _origin?: "repo" | "definitely-gp" | "derived" | "additional-content" | "default";
+    _origin?: "repo" | "derived" | "additional-content" | "default";
 
     /**
      * Set of automatically infered feature flags. That's not something the user can set, but
@@ -1053,6 +931,8 @@ export interface PrebuiltWorkspace {
     snapshot?: string;
 }
 
+export type PrebuiltWorkspaceWithWorkspace = PrebuiltWorkspace & { workspace: Workspace };
+
 export namespace PrebuiltWorkspace {
     export function isDone(pws: PrebuiltWorkspace) {
         return (
@@ -1082,13 +962,6 @@ export interface PrebuiltWorkspaceUpdatable {
     commitSHA?: string;
     issue?: string;
     contextUrl?: string;
-}
-
-export interface WhitelistedRepository {
-    url: string;
-    name: string;
-    description?: string;
-    avatar?: string;
 }
 
 export type PortOnOpen = "open-browser" | "open-preview" | "notify" | "ignore";
@@ -1142,9 +1015,7 @@ export namespace WorkspaceImageBuild {
         maxSteps?: number;
     }
     export interface LogContent {
-        text: string;
-        upToLine?: number;
-        isDiff?: boolean;
+        data: number[]; // encode with "Array.from(UInt8Array)"", decode with "new UInt8Array(data)"
     }
     export type LogCallback = (info: StateInfo, content: LogContent | undefined) => void;
     export namespace LogLine {
@@ -1187,6 +1058,8 @@ export interface WorkspaceContext {
     normalizedContextURL?: string;
     forceCreateNewWorkspace?: boolean;
     forceImageBuild?: boolean;
+    // The context can have non-blocking warnings that should be displayed to the user.
+    warnings?: string[];
 }
 
 export namespace WorkspaceContext {
@@ -1379,6 +1252,10 @@ export namespace CommitContext {
         }
         return hasher.digest("hex");
     }
+
+    export function isDefaultBranch(commitContext: CommitContext): boolean {
+        return commitContext.ref === commitContext.repository.defaultBranch;
+    }
 }
 
 export interface GitCheckoutInfo extends Commit {
@@ -1448,7 +1325,21 @@ export interface Repository {
         // The direct parent of this fork
         parent: Repository;
     };
+    /**
+     * Optional date when the repository was last pushed to.
+     */
+    pushedAt?: string;
+    /**
+     * Optional display name (e.g. for Bitbucket)
+     */
+    displayName?: string;
 }
+
+export interface RepositoryInfo {
+    url: string;
+    name: string;
+}
+
 export interface Branch {
     name: string;
     commit: CommitInfo;
@@ -1461,12 +1352,6 @@ export interface CommitInfo {
     commitMessage: string;
     authorAvatarUrl?: string;
     authorDate?: string;
-}
-
-export namespace Repository {
-    export function fullRepoName(repo: Repository): string {
-        return `${repo.host}/${repo.owner}/${repo.name}`;
-    }
 }
 
 export interface WorkspaceInstancePortsChangedEvent {
@@ -1482,6 +1367,10 @@ export namespace WorkspaceInstancePortsChangedEvent {
     }
 }
 
+export interface WorkspaceSession {
+    workspace: Workspace;
+    instance: WorkspaceInstance;
+}
 export interface WorkspaceInfo {
     workspace: Workspace;
     latestInstance?: WorkspaceInstance;
@@ -1499,16 +1388,7 @@ export interface WorkspaceCreationResult {
     createdWorkspaceId?: string;
     workspaceURL?: string;
     existingWorkspaces?: WorkspaceInfo[];
-    runningWorkspacePrebuild?: {
-        prebuildID: string;
-        workspaceID: string;
-        instanceID: string;
-        starting: RunningWorkspacePrebuildStarting;
-        sameCluster: boolean;
-    };
-    runningPrebuildWorkspaceID?: string;
 }
-export type RunningWorkspacePrebuildStarting = "queued" | "starting" | "running";
 
 export namespace WorkspaceCreationResult {
     export function is(data: any): data is WorkspaceCreationResult {
@@ -1522,17 +1402,6 @@ export namespace WorkspaceCreationResult {
     }
 }
 
-export interface UserMessage {
-    readonly id: string;
-    readonly title?: string;
-    /**
-     * date from where on this message should be shown
-     */
-    readonly from?: string;
-    readonly content?: string;
-    readonly url?: string;
-}
-
 export interface AuthProviderInfo {
     readonly authProviderId: string;
     readonly authProviderType: string;
@@ -1540,7 +1409,6 @@ export interface AuthProviderInfo {
     readonly ownerId?: string;
     readonly organizationId?: string;
     readonly verified: boolean;
-    readonly isReadonly?: boolean;
     readonly hiddenOnDashboard?: boolean;
     readonly disallowLogin?: boolean;
     readonly icon?: string;
@@ -1583,22 +1451,39 @@ export interface OAuth2Config {
 }
 
 export namespace AuthProviderEntry {
-    export type Type = "GitHub" | "GitLab" | string;
+    export type Type = "GitHub" | "GitLab" | "Bitbucket" | "BitbucketServer" | "AzureDevOps" | string;
     export type Status = "pending" | "verified";
+
+    /**
+     * Some auth providers require additional configuration like Azure DevOps.
+     */
+    export interface OAuth2CustomConfig {
+        /**
+         * The URL to the authorize endpoint of the provider.
+         */
+        authorizationUrl?: string;
+        /**
+         * The URL to the oauth token endpoint of the provider.
+         */
+        tokenUrl?: string;
+    }
     export type NewEntry = Pick<AuthProviderEntry, "ownerId" | "host" | "type"> & {
         clientId?: string;
         clientSecret?: string;
-    };
-    export type UpdateEntry = Pick<AuthProviderEntry, "id" | "ownerId"> &
-        Pick<OAuth2Config, "clientId" | "clientSecret">;
+    } & OAuth2CustomConfig;
+    export type UpdateEntry = Pick<AuthProviderEntry, "id" | "ownerId"> & {
+        clientId?: string;
+        clientSecret?: string;
+    } & OAuth2CustomConfig;
     export type NewOrgEntry = NewEntry & {
         organizationId: string;
     };
     export type UpdateOrgEntry = Pick<AuthProviderEntry, "id"> & {
-        clientId: string;
-        clientSecret: string;
+        clientId?: string;
+        clientSecret?: string;
         organizationId: string;
-    };
+    } & OAuth2CustomConfig;
+    export type UpdateOAuth2Config = Pick<OAuth2Config, "clientId" | "clientSecret"> & OAuth2CustomConfig;
     export function redact(entry: AuthProviderEntry): AuthProviderEntry {
         return {
             ...entry,
@@ -1611,9 +1496,7 @@ export namespace AuthProviderEntry {
 }
 
 export interface Configuration {
-    readonly daysBeforeGarbageCollection: number;
-    readonly garbageCollectionStartDate: number;
-    readonly isSingleOrgInstallation: boolean;
+    readonly isDedicatedInstallation: boolean;
 }
 
 export interface StripeConfig {
@@ -1628,3 +1511,10 @@ export interface LinkedInProfile {
     profilePicture: string;
     emailAddress: string;
 }
+
+export type SuggestedRepository = {
+    url: string;
+    projectId?: string;
+    projectName?: string;
+    repositoryName?: string;
+};

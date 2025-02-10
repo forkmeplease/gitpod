@@ -10,7 +10,9 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"unsafe"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/mitchellh/reflectwalk"
 )
 
@@ -32,7 +34,7 @@ Example:
 		Example
 	}
 
-	func (TrustedExample) isTrustedValue() {}
+	func (TrustedExample) IsTrustedValue() {}
 
 	func scrubExample(e *Example) *TrustedExample {
 		return &TrustedExample{
@@ -45,7 +47,7 @@ Example:
 	}
 */
 type TrustedValue interface {
-	isTrustedValue()
+	IsTrustedValue()
 }
 
 // Scrubber defines the interface for a scrubber, which can sanitise various types of data.
@@ -86,27 +88,70 @@ type Scrubber interface {
 	//   }
 	//
 	Struct(val any) error
+
+	// DeepCopyStruct scrubes a struct with a deep copy.
+	// The difference between `DeepCopyStruct` and `Struct`` is that DeepCopyStruct does not modify the structure directly,
+	// but creates a deep copy instead.
+	// Also, val can be a pointer or a structure.
+	DeepCopyStruct(val any) any
+}
+
+type ScrubberImplConfig struct {
+	HashedFieldNames         []string
+	HashedURLPathsFieldNames []string
+	RedactedFieldNames       []string
+	HashedValues             map[string]*regexp.Regexp
+	RedactedValues           map[string]*regexp.Regexp
+}
+
+// CreateCustomScrubber creates a new scrubber with the given configuration
+// !!! Only use this if you know what you're doing. For all logging purposes, use the "Default" impl !!!
+func CreateCustomScrubber(cfg *ScrubberImplConfig) Scrubber {
+	return createScrubberImpl(cfg)
 }
 
 // Default is the default scrubber consumers of this package should use
 var Default Scrubber = newScrubberImpl()
 
 func newScrubberImpl() *scrubberImpl {
-	hashedRegex, err := regexp.Compile("(?i)(" + strings.Join(HashedFieldNames, "|") + ")")
-	if err != nil {
-		panic(fmt.Errorf("cannot compile hashed regex: %w", err))
+	defaultCfg := ScrubberImplConfig{
+		HashedFieldNames:         HashedFieldNames,
+		HashedURLPathsFieldNames: HashedURLPathsFieldNames,
+		RedactedFieldNames:       RedactedFieldNames,
+		HashedValues:             HashedValues,
+		RedactedValues:           RedactedValues,
+	}
+	return createScrubberImpl(&defaultCfg)
+}
+
+func createScrubberImpl(cfg *ScrubberImplConfig) *scrubberImpl {
+	var (
+		lowerSanitiseHash         []string
+		lowerSanitiseHashURLPaths []string
+		lowerSanitiseRedact       []string
+	)
+	for _, v := range cfg.HashedFieldNames {
+		lowerSanitiseHash = append(lowerSanitiseHash, strings.ToLower(v))
+	}
+	for _, v := range cfg.HashedURLPathsFieldNames {
+		lowerSanitiseHashURLPaths = append(lowerSanitiseHashURLPaths, strings.ToLower(v))
+	}
+	for _, v := range cfg.RedactedFieldNames {
+		lowerSanitiseRedact = append(lowerSanitiseRedact, strings.ToLower(v))
 	}
 
-	redactedRegex, err := regexp.Compile("(?i)(" + strings.Join(RedactedFieldNames, "|") + ")")
+	cache, err := lru.New(1000)
 	if err != nil {
-		panic(fmt.Errorf("cannot compile redacted regex: %w", err))
+		panic(fmt.Errorf("cannot create cache: %w", err))
 	}
 
 	res := &scrubberImpl{
-		RegexpIndex: map[*regexp.Regexp]Sanitisatiser{
-			hashedRegex:   SanitiseHash,
-			redactedRegex: SanitiseRedact,
-		},
+		LowerSanitiseHash:         lowerSanitiseHash,
+		LowerSanitiseHashURLPaths: lowerSanitiseHashURLPaths,
+		LowerSanitiseRedact:       lowerSanitiseRedact,
+		HashedValues:              cfg.HashedValues,
+		RedactedValues:            cfg.RedactedValues,
+		KeySanitiserCache:         cache,
 	}
 	res.Walker = &structScrubber{Parent: res}
 
@@ -114,8 +159,13 @@ func newScrubberImpl() *scrubberImpl {
 }
 
 type scrubberImpl struct {
-	Walker      *structScrubber
-	RegexpIndex map[*regexp.Regexp]Sanitisatiser
+	Walker                    *structScrubber
+	LowerSanitiseHash         []string
+	LowerSanitiseHashURLPaths []string
+	LowerSanitiseRedact       []string
+	HashedValues              map[string]*regexp.Regexp
+	RedactedValues            map[string]*regexp.Regexp
+	KeySanitiserCache         *lru.Cache
 }
 
 // JSON implements Scrubber
@@ -145,14 +195,47 @@ func (s *scrubberImpl) KeyValue(key string, value string) (sanitisedValue string
 	return sanitisatiser(value)
 }
 
+type keySanitiser struct {
+	s Sanitisatiser
+}
+
+var (
+	sanitiseIgnore              keySanitiser = keySanitiser{s: nil}
+	sanitiseHash                keySanitiser = keySanitiser{s: SanitiseHash}
+	sanitiseHashURLPathSegments keySanitiser = keySanitiser{s: SanitiseHashURLPathSegments}
+	sanitiseRedact              keySanitiser = keySanitiser{s: SanitiseRedact}
+)
+
 // getSanitisatiser implements
 func (s *scrubberImpl) getSanitisatiser(key string) Sanitisatiser {
-	for re, sanitisatiser := range s.RegexpIndex {
-		if re.MatchString(key) {
-			return sanitisatiser
+	lower := strings.ToLower(key)
+	san, ok := s.KeySanitiserCache.Get(lower)
+	if ok {
+		w := san.(keySanitiser)
+		return w.s
+	}
+
+	for _, f := range s.LowerSanitiseRedact {
+		if strings.Contains(lower, f) {
+			s.KeySanitiserCache.Add(lower, sanitiseRedact)
+			return SanitiseRedact
+		}
+	}
+	// Give sanitiseHashURLPathSegments precedence over sanitiseHash
+	for _, f := range s.LowerSanitiseHashURLPaths {
+		if strings.Contains(lower, f) {
+			s.KeySanitiserCache.Add(lower, sanitiseHashURLPathSegments)
+			return SanitiseHashURLPathSegments
+		}
+	}
+	for _, f := range s.LowerSanitiseHash {
+		if strings.Contains(lower, f) {
+			s.KeySanitiserCache.Add(lower, sanitiseHash)
+			return SanitiseHash
 		}
 	}
 
+	s.KeySanitiserCache.Add(lower, sanitiseIgnore)
 	return nil
 }
 
@@ -189,6 +272,148 @@ func (s *scrubberImpl) Struct(val any) error {
 	return nil
 }
 
+func (s *scrubberImpl) deepCopyStruct(fieldName string, src reflect.Value, scrubTag string, skipScrub bool) reflect.Value {
+	if src.Kind() == reflect.Ptr && src.IsNil() {
+		return reflect.New(src.Type()).Elem()
+	}
+
+	if src.CanInterface() {
+		value := src.Interface()
+		if _, ok := value.(TrustedValue); ok {
+			skipScrub = true
+		}
+	}
+
+	if src.Kind() == reflect.String && !skipScrub {
+		dst := reflect.New(src.Type())
+		var (
+			setExplicitValue bool
+			explicitValue    string
+		)
+		switch scrubTag {
+		case "ignore":
+			dst.Elem().SetString(src.String())
+			if !dst.CanInterface() {
+				return dst
+			}
+			return dst.Elem()
+		case "hash":
+			setExplicitValue = true
+			explicitValue = SanitiseHash(src.String())
+		case "redact":
+			setExplicitValue = true
+			explicitValue = SanitiseRedact(src.String())
+		}
+
+		if setExplicitValue {
+			dst.Elem().SetString(explicitValue)
+		} else {
+			sanitisatiser := s.getSanitisatiser(fieldName)
+			if sanitisatiser != nil {
+				dst.Elem().SetString(sanitisatiser(src.String()))
+			} else {
+				dst.Elem().SetString(s.Value(src.String()))
+			}
+		}
+		if !dst.CanInterface() {
+			return dst
+		}
+		return dst.Elem()
+	}
+
+	switch src.Kind() {
+	case reflect.Struct:
+		dst := reflect.New(src.Type())
+		t := src.Type()
+
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			srcValue := src.Field(i)
+			dstValue := dst.Elem().Field(i)
+
+			if !srcValue.CanInterface() {
+				dstValue = reflect.NewAt(dstValue.Type(), unsafe.Pointer(dstValue.UnsafeAddr())).Elem()
+
+				if !srcValue.CanAddr() {
+					switch {
+					case srcValue.CanInt():
+						dstValue.SetInt(srcValue.Int())
+					case srcValue.CanUint():
+						dstValue.SetUint(srcValue.Uint())
+					case srcValue.CanFloat():
+						dstValue.SetFloat(srcValue.Float())
+					case srcValue.CanComplex():
+						dstValue.SetComplex(srcValue.Complex())
+					case srcValue.Kind() == reflect.Bool:
+						dstValue.SetBool(srcValue.Bool())
+					}
+
+					continue
+				}
+
+				srcValue = reflect.NewAt(srcValue.Type(), unsafe.Pointer(srcValue.UnsafeAddr())).Elem()
+			}
+
+			tagValue := f.Tag.Get("scrub")
+			copied := s.deepCopyStruct(f.Name, srcValue, tagValue, skipScrub)
+			dstValue.Set(copied)
+		}
+		return dst.Elem()
+
+	case reflect.Map:
+		dst := reflect.MakeMap(src.Type())
+		keys := src.MapKeys()
+		for i := 0; i < src.Len(); i++ {
+			mValue := src.MapIndex(keys[i])
+			dst.SetMapIndex(keys[i], s.deepCopyStruct(keys[i].String(), mValue, "", skipScrub))
+		}
+		return dst
+
+	case reflect.Slice:
+		dst := reflect.MakeSlice(src.Type(), src.Len(), src.Cap())
+		for i := 0; i < src.Len(); i++ {
+			dst.Index(i).Set(s.deepCopyStruct(fieldName, src.Index(i), "", skipScrub))
+		}
+		return dst
+
+	case reflect.Array:
+		if src.Len() == 0 {
+			return src
+		}
+
+		dst := reflect.New(src.Type()).Elem()
+		for i := 0; i < src.Len(); i++ {
+			dst.Index(i).Set(s.deepCopyStruct(fieldName, src.Index(i), "", skipScrub))
+		}
+		return dst
+
+	case reflect.Interface:
+		if src.IsNil() {
+			return src
+		}
+		dst := reflect.New(src.Elem().Type())
+		copied := s.deepCopyStruct(fieldName, src.Elem(), scrubTag, skipScrub)
+		dst.Elem().Set(copied)
+		return dst.Elem()
+
+	case reflect.Ptr:
+		dst := reflect.New(src.Elem().Type())
+		copied := s.deepCopyStruct(fieldName, src.Elem(), scrubTag, skipScrub)
+		dst.Elem().Set(copied)
+		return dst
+
+	default:
+		dst := reflect.New(src.Type())
+		dst.Elem().Set(src)
+		return dst.Elem()
+	}
+}
+
+// Struct implements Scrubber
+func (s *scrubberImpl) DeepCopyStruct(val any) any {
+	return s.deepCopyStruct("", reflect.ValueOf(val), "", false).Interface()
+}
+
 func (s *scrubberImpl) scrubJsonObject(val map[string]interface{}) error {
 	// fix https://github.com/gitpod-io/security/issues/64
 	name, _ := val["name"].(string)
@@ -222,12 +447,12 @@ func (s *scrubberImpl) scrubJsonSlice(val []interface{}) error {
 
 // Value implements Scrubber
 func (s *scrubberImpl) Value(value string) string {
-	for key, expr := range HashedValues {
+	for key, expr := range s.HashedValues {
 		value = expr.ReplaceAllStringFunc(value, func(s string) string {
 			return SanitiseHash(s, SanitiseWithKeyName(key))
 		})
 	}
-	for key, expr := range RedactedValues {
+	for key, expr := range s.RedactedValues {
 		value = expr.ReplaceAllStringFunc(value, func(s string) string {
 			return SanitiseRedact(s, SanitiseWithKeyName(key))
 		})
@@ -249,6 +474,9 @@ var (
 
 // Pointer implements reflectwalk.PointerValueWalker
 func (s *structScrubber) Pointer(val reflect.Value) error {
+	if !val.CanInterface() {
+		return nil
+	}
 	value := val.Interface()
 	if _, ok := value.(TrustedValue); ok {
 		return reflectwalk.SkipEntry
@@ -349,6 +577,9 @@ func (s *structScrubber) MapElem(m reflect.Value, k reflect.Value, v reflect.Val
 	if kind == reflect.Interface {
 		v = v.Elem()
 		kind = v.Kind()
+	}
+	if k.Kind() == reflect.Interface {
+		k = k.Elem()
 	}
 	if kind == reflect.String {
 		m.SetMapIndex(k, reflect.ValueOf(s.Parent.KeyValue(k.String(), v.String())))

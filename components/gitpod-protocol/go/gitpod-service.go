@@ -41,8 +41,8 @@ type APIInterface interface {
 	GetWorkspaces(ctx context.Context, options *GetWorkspacesOptions) (res []*WorkspaceInfo, err error)
 	GetWorkspaceOwner(ctx context.Context, workspaceID string) (res *UserInfo, err error)
 	GetWorkspaceUsers(ctx context.Context, workspaceID string) (res []*WorkspaceInstanceUser, err error)
-	GetFeaturedRepositories(ctx context.Context) (res []*WhitelistedRepository, err error)
 	GetWorkspace(ctx context.Context, id string) (res *WorkspaceInfo, err error)
+	GetIDEOptions(ctx context.Context) (res *IDEOptions, err error)
 	IsWorkspaceOwner(ctx context.Context, workspaceID string) (res bool, err error)
 	CreateWorkspace(ctx context.Context, options *CreateWorkspaceOptions) (res *WorkspaceCreationResult, err error)
 	StartWorkspace(ctx context.Context, id string, options *StartWorkspaceOptions) (res *StartWorkspaceResult, err error)
@@ -61,7 +61,6 @@ type APIInterface interface {
 	ClosePort(ctx context.Context, workspaceID string, port float32) (err error)
 	UpdateGitStatus(ctx context.Context, workspaceID string, status *WorkspaceInstanceRepoStatus) (err error)
 	GetWorkspaceEnvVars(ctx context.Context, workspaceID string) (res []*EnvVar, err error)
-	GetEnvVars(ctx context.Context) (res []*EnvVar, err error)
 	SetEnvVar(ctx context.Context, variable *UserEnvVarValue) (err error)
 	DeleteEnvVar(ctx context.Context, variable *UserEnvVarValue) (err error)
 	HasSSHPublicKey(ctx context.Context) (res bool, err error)
@@ -90,6 +89,11 @@ type APIInterface interface {
 	ResetGenericInvite(ctx context.Context, teamID string) (*TeamMembershipInvite, error)
 	SetTeamMemberRole(ctx context.Context, teamID, userID string, role TeamMemberRole) error
 	RemoveTeamMember(ctx context.Context, teamID, userID string) error
+
+	// Organization
+	GetOrgSettings(ctx context.Context, orgID string) (*OrganizationSettings, error)
+
+	GetDefaultWorkspaceImage(ctx context.Context, params *GetDefaultWorkspaceImageParams) (res *GetDefaultWorkspaceImageResult, err error)
 
 	// Projects
 	CreateProject(ctx context.Context, options *CreateProjectOptions) (*Project, error)
@@ -138,10 +142,10 @@ const (
 	FunctionGetWorkspaceOwner FunctionName = "getWorkspaceOwner"
 	// FunctionGetWorkspaceUsers is the name of the getWorkspaceUsers function
 	FunctionGetWorkspaceUsers FunctionName = "getWorkspaceUsers"
-	// FunctionGetFeaturedRepositories is the name of the getFeaturedRepositories function
-	FunctionGetFeaturedRepositories FunctionName = "getFeaturedRepositories"
 	// FunctionGetWorkspace is the name of the getWorkspace function
 	FunctionGetWorkspace FunctionName = "getWorkspace"
+	// FunctionGetIDEOptions is the name of the getIDEOptions function
+	FunctionGetIDEOptions FunctionName = "getIDEOptions"
 	// FunctionIsWorkspaceOwner is the name of the isWorkspaceOwner function
 	FunctionIsWorkspaceOwner FunctionName = "isWorkspaceOwner"
 	// FunctionCreateWorkspace is the name of the createWorkspace function
@@ -174,8 +178,6 @@ const (
 	FunctionOpenPort FunctionName = "openPort"
 	// FunctionClosePort is the name of the closePort function
 	FunctionClosePort FunctionName = "closePort"
-	// FunctionGetEnvVars is the name of the getEnvVars function
-	FunctionGetEnvVars FunctionName = "getEnvVars"
 	// FunctionSetEnvVar is the name of the setEnvVar function
 	FunctionSetEnvVar FunctionName = "setEnvVar"
 	// FunctionDeleteEnvVar is the name of the deleteEnvVar function
@@ -228,6 +230,13 @@ const (
 	FunctionRemoveTeamMember FunctionName = "removeTeamMember"
 	// FunctionDeleteTeam is the name of the deleteTeam function
 	FunctionDeleteTeam FunctionName = "deleteTeam"
+
+	// Organizations
+	// FunctionGetOrgSettings is the name of the getOrgSettings function
+	FunctionGetOrgSettings FunctionName = "getOrgSettings"
+
+	// FunctionGetDefaultWorkspaceImage is the name of the getDefaultWorkspaceImage function
+	FunctionGetDefaultWorkspaceImage FunctionName = "getDefaultWorkspaceImage"
 
 	// Projects
 	FunctionCreateProject   FunctionName = "createProject"
@@ -403,6 +412,23 @@ func (gp *APIoverJSONRPC) AdminBlockUser(ctx context.Context, message *AdminBloc
 
 	var _result interface{}
 	err = gp.C.Call(ctx, "adminBlockUser", _params, &_result)
+	if err != nil {
+		return err
+	}
+	return
+}
+
+// AdminVerifyUser calls adminVerifyUser on the server
+func (gp *APIoverJSONRPC) AdminVerifyUser(ctx context.Context, userId string) (err error) {
+	if gp == nil {
+		err = errNotConnected
+		return
+	}
+	var _params []interface{}
+	_params = append(_params, userId)
+
+	var _result interface{}
+	err = gp.C.Call(ctx, "adminVerifyUser", _params, &_result)
 	if err != nil {
 		return err
 	}
@@ -671,24 +697,6 @@ func (gp *APIoverJSONRPC) GetWorkspaceUsers(ctx context.Context, workspaceID str
 	return
 }
 
-// GetFeaturedRepositories calls getFeaturedRepositories on the server
-func (gp *APIoverJSONRPC) GetFeaturedRepositories(ctx context.Context) (res []*WhitelistedRepository, err error) {
-	if gp == nil {
-		err = errNotConnected
-		return
-	}
-	var _params []interface{}
-
-	var result []*WhitelistedRepository
-	err = gp.C.Call(ctx, "getFeaturedRepositories", _params, &result)
-	if err != nil {
-		return
-	}
-	res = result
-
-	return
-}
-
 // GetWorkspace calls getWorkspace on the server
 func (gp *APIoverJSONRPC) GetWorkspace(ctx context.Context, id string) (res *WorkspaceInfo, err error) {
 	if gp == nil {
@@ -704,6 +712,25 @@ func (gp *APIoverJSONRPC) GetWorkspace(ctx context.Context, id string) (res *Wor
 	if err != nil {
 		return
 	}
+	res = &result
+
+	return
+}
+
+// GetIDEOptions calls getIDEOptions on the server
+func (gp *APIoverJSONRPC) GetIDEOptions(ctx context.Context) (res *IDEOptions, err error) {
+	if gp == nil {
+		err = errNotConnected
+		return
+	}
+	var _params []interface{}
+
+	var result IDEOptions
+	err = gp.C.Call(ctx, "getIDEOptions", _params, &result)
+	if err != nil {
+		return
+	}
+
 	res = &result
 
 	return
@@ -1050,24 +1077,6 @@ func (gp *APIoverJSONRPC) GetWorkspaceEnvVars(ctx context.Context, workspaceID s
 
 	var result []*EnvVar
 	err = gp.C.Call(ctx, "getWorkspaceEnvVars", _params, &result)
-	if err != nil {
-		return
-	}
-	res = result
-
-	return
-}
-
-// GetEnvVars calls getEnvVars on the server
-func (gp *APIoverJSONRPC) GetEnvVars(ctx context.Context) (res []*EnvVar, err error) {
-	if gp == nil {
-		err = errNotConnected
-		return
-	}
-	var _params []interface{}
-
-	var result []*EnvVar
-	err = gp.C.Call(ctx, "getEnvVars", _params, &result)
 	if err != nil {
 		return
 	}
@@ -1428,6 +1437,29 @@ func (gp *APIoverJSONRPC) DeleteTeam(ctx context.Context, teamID string) (err er
 	return
 }
 
+func (gp *APIoverJSONRPC) GetOrgSettings(ctx context.Context, orgID string) (res *OrganizationSettings, err error) {
+	if gp == nil {
+		err = errNotConnected
+		return
+	}
+	_params := []interface{}{orgID}
+	err = gp.C.Call(ctx, string(FunctionGetOrgSettings), _params, &res)
+	return
+}
+
+func (gp *APIoverJSONRPC) GetDefaultWorkspaceImage(ctx context.Context, params *GetDefaultWorkspaceImageParams) (res *GetDefaultWorkspaceImageResult, err error) {
+	if gp == nil {
+		err = errNotConnected
+		return
+	}
+	var _params []interface{}
+
+	_params = append(_params, params)
+
+	err = gp.C.Call(ctx, string(FunctionGetDefaultWorkspaceImage), _params, &res)
+	return
+}
+
 func (gp *APIoverJSONRPC) CreateProject(ctx context.Context, options *CreateProjectOptions) (res *Project, err error) {
 	if gp == nil {
 		err = errNotConnected
@@ -1600,19 +1632,9 @@ type Repository struct {
 
 // WorkspaceCreationResult is the WorkspaceCreationResult message type
 type WorkspaceCreationResult struct {
-	CreatedWorkspaceID         string                    `json:"createdWorkspaceId,omitempty"`
-	ExistingWorkspaces         []*WorkspaceInfo          `json:"existingWorkspaces,omitempty"`
-	RunningPrebuildWorkspaceID string                    `json:"runningPrebuildWorkspaceID,omitempty"`
-	RunningWorkspacePrebuild   *RunningWorkspacePrebuild `json:"runningWorkspacePrebuild,omitempty"`
-	WorkspaceURL               string                    `json:"workspaceURL,omitempty"`
-}
-
-// RunningWorkspacePrebuild is the RunningWorkspacePrebuild message type
-type RunningWorkspacePrebuild struct {
-	PrebuildID  string `json:"prebuildID,omitempty"`
-	SameCluster bool   `json:"sameCluster,omitempty"`
-	Starting    string `json:"starting,omitempty"`
-	WorkspaceID string `json:"workspaceID,omitempty"`
+	CreatedWorkspaceID string           `json:"createdWorkspaceId,omitempty"`
+	ExistingWorkspaces []*WorkspaceInfo `json:"existingWorkspaces,omitempty"`
+	WorkspaceURL       string           `json:"workspaceURL,omitempty"`
 }
 
 // Workspace is the Workspace message type
@@ -1673,7 +1695,6 @@ type WorkspaceConfig struct {
 	// Where the config object originates from.
 	//
 	// repo - from the repository
-	// definitely-gp - from github.com/gitpod-io/definitely-gp
 	// derived - computed based on analyzing the repository
 	// default - our static catch-all default config
 	Origin            string        `json:"_origin,omitempty"`
@@ -1744,8 +1765,16 @@ type WorkspaceInstanceConditions struct {
 
 // WorkspaceInstanceConfiguration is the WorkspaceInstanceConfiguration message type
 type WorkspaceInstanceConfiguration struct {
-	FeatureFlags []string `json:"featureFlags,omitempty"`
-	TheiaVersion string   `json:"theiaVersion,omitempty"`
+	FeatureFlags []string                    `json:"featureFlags,omitempty"`
+	TheiaVersion string                      `json:"theiaVersion,omitempty"`
+	IDEConfig    *WorkspaceInstanceIDEConfig `json:"ideConfig,omitempty"`
+}
+
+// WorkspaceInstanceIDEConfig is the ide config information of a workspace instance
+type WorkspaceInstanceIDEConfig struct {
+	UseLatest     bool   `json:"useLatest,omitempty"`
+	IDE           string `json:"ide,omitempty"`
+	PreferToolbox bool   `json:"preferToolbox,omitempty"`
 }
 
 // WorkspaceInstanceRepoStatus is the WorkspaceInstanceRepoStatus message type
@@ -1768,7 +1797,6 @@ type WorkspaceInstanceStatus struct {
 	NodeName     string                       `json:"nodeName,omitempty"`
 	OwnerToken   string                       `json:"ownerToken,omitempty"`
 	Phase        string                       `json:"phase,omitempty"`
-	Repo         *WorkspaceInstanceRepoStatus `json:"repo,omitempty"`
 	Timeout      string                       `json:"timeout,omitempty"`
 	Version      int                          `json:"version,omitempty"`
 }
@@ -1778,6 +1806,7 @@ type StartWorkspaceOptions struct {
 	ForceDefaultImage bool         `json:"forceDefaultImage,omitempty"`
 	WorkspaceClass    string       `json:"workspaceClass,omitempty"`
 	IdeSettings       *IDESettings `json:"ideSettings,omitempty"`
+	Region            string       `json:"region,omitempty"`
 }
 
 // GetWorkspaceTimeoutResult is the GetWorkspaceTimeoutResult message type
@@ -1857,16 +1886,7 @@ type VSCodeConfig struct {
 
 // Configuration is the Configuration message type
 type Configuration struct {
-	DaysBeforeGarbageCollection float64 `json:"daysBeforeGarbageCollection,omitempty"`
-	GarbageCollectionStartDate  float64 `json:"garbageCollectionStartDate,omitempty"`
-}
-
-// WhitelistedRepository is the WhitelistedRepository message type
-type WhitelistedRepository struct {
-	Avatar      string `json:"avatar,omitempty"`
-	Description string `json:"description,omitempty"`
-	Name        string `json:"name,omitempty"`
-	URL         string `json:"url,omitempty"`
+	IsDedicatedInstallation bool `json:"isDedicatedInstallation,omitempty"`
 }
 
 // EnvVar is the EnvVar message type
@@ -1947,11 +1967,12 @@ type UpdateOwnAuthProviderParams struct {
 type CreateWorkspaceOptions struct {
 	StartWorkspaceOptions
 	ContextURL                         string `json:"contextUrl,omitempty"`
+	ProjectId                          string `json:"projectId,omitempty"`
 	OrganizationId                     string `json:"organizationId,omitempty"`
-	IgnoreRunningWorkspaceOnSameCommit bool   `json:"ignoreRunningWorkspaceOnSameCommit,omitemopty"`
-	IgnoreRunningPrebuild              bool   `json:"ignoreRunningPrebuild,omitemopty"`
-	AllowUsingPreviousPrebuilds        bool   `json:"allowUsingPreviousPrebuilds,omitemopty"`
-	ForceDefaultConfig                 bool   `json:"forceDefaultConfig,omitemopty"`
+	IgnoreRunningWorkspaceOnSameCommit bool   `json:"ignoreRunningWorkspaceOnSameCommit,omitempty"`
+	ForceDefaultConfig                 bool   `json:"forceDefaultConfig,omitempty"`
+	IgnoreRunningPrebuild              bool   `json:"ignoreRunningPrebuild,omitempty"`
+	AllowUsingPreviousPrebuilds        bool   `json:"allowUsingPreviousPrebuilds,omitempty"`
 }
 
 // DeleteOwnAuthProviderParams is the DeleteOwnAuthProviderParams message type
@@ -2022,7 +2043,8 @@ type IDESettings struct {
 	DefaultIde        string `json:"defaultIde,omitempty"`
 	UseDesktopIde     bool   `json:"useDesktopIde,omitempty"`
 	DefaultDesktopIde string `json:"defaultDesktopIde,omitempty"`
-	UseLatestVersion  bool   `json:"useLatestVersion,omitempty"`
+	UseLatestVersion  bool   `json:"useLatestVersion"`
+	PreferToolbox     bool   `json:"preferToolbox"`
 }
 
 // EmailNotificationSettings is the EmailNotificationSettings message type
@@ -2037,10 +2059,11 @@ type Identity struct {
 	AuthProviderID string `json:"authProviderId,omitempty"`
 
 	// This is a flag that triggers the HARD DELETION of this entity
-	Deleted      bool     `json:"deleted,omitempty"`
-	PrimaryEmail string   `json:"primaryEmail,omitempty"`
-	Readonly     bool     `json:"readonly,omitempty"`
-	Tokens       []*Token `json:"tokens,omitempty"`
+	Deleted        bool     `json:"deleted,omitempty"`
+	PrimaryEmail   string   `json:"primaryEmail,omitempty"`
+	Readonly       bool     `json:"readonly,omitempty"`
+	Tokens         []*Token `json:"tokens,omitempty"`
+	LastSigninTime string   `json:"lastSigninTime,omitempty"`
 }
 
 // User is the User message type
@@ -2195,6 +2218,11 @@ type TeamMembershipInvite struct {
 	InvitedEmail     string         `json:"invitedEmail,omitempty"`
 }
 
+type OrganizationSettings struct {
+	WorkspaceSharingDisabled bool   `json:"workspaceSharingDisabled,omitempty"`
+	DefaultWorkspaceImage    string `json:"defaultWorkspaceImage,omitempty"`
+}
+
 type Project struct {
 	ID                string           `json:"id,omitempty"`
 	UserID            string           `json:"userId,omitempty"`
@@ -2208,12 +2236,17 @@ type Project struct {
 }
 
 type ProjectSettings struct {
-	UseIncrementalPrebuilds      bool                      `json:"useIncrementalPrebuilds,omitempty"`
-	UsePersistentVolumeClaim     bool                      `json:"usePersistentVolumeClaim,omitempty"`
-	KeepOutdatedPrebuildsRunning bool                      `json:"keepOutdatedPrebuildsRunning,omitempty"`
-	AllowUsingPreviousPrebuilds  bool                      `json:"allowUsingPreviousPrebuilds,omitempty"`
-	PrebuildEveryNthCommit       int                       `json:"prebuildEveryNthCommit,omitempty"`
-	WorkspaceClasses             *WorkspaceClassesSettings `json:"workspaceClasses,omitempty"`
+	UsePersistentVolumeClaim   bool                      `json:"usePersistentVolumeClaim,omitempty"`
+	WorkspaceClasses           *WorkspaceClassesSettings `json:"workspaceClasses,omitempty"`
+	PrebuildSettings           *PrebuildSettings         `json:"prebuilds,omitempty"`
+	RestrictedWorkspaceClasses *[]string                 `json:"restrictedWorkspaceClasses,omitempty"`
+}
+type PrebuildSettings struct {
+	Enable                *bool   `json:"enable,omitempty"`
+	PrebuildInterval      *int32  `json:"prebuildInterval,omitempty"`
+	BranchStrategy        *string `json:"branchStrategy,omitempty"`
+	BranchMatchingPattern *string `json:"branchMatchingPattern,omitempty"`
+	WorkspaceClass        *string `json:"workspaceClass,omitempty"`
 }
 
 type WorkspaceClassesSettings struct {
@@ -2228,4 +2261,94 @@ type CreateProjectOptions struct {
 	Slug              string `json:"slug,omitempty"`
 	CloneURL          string `json:"cloneUrl,omitempty"`
 	AppInstallationID string `json:"appInstallationId,omitempty"`
+}
+
+type IDEType string
+
+const (
+	IDETypeBrowser IDEType = "browser"
+	IDETypeDesktop IDEType = "desktop"
+)
+
+type IDEConfig struct {
+	SupervisorImage string     `json:"supervisorImage"`
+	IdeOptions      IDEOptions `json:"ideOptions"`
+}
+
+type IDEOptions struct {
+	// Options is a list of available IDEs.
+	Options map[string]IDEOption `json:"options"`
+	// DefaultIde when the user has not specified one.
+	DefaultIde string `json:"defaultIde"`
+	// DefaultDesktopIde when the user has not specified one.
+	DefaultDesktopIde string `json:"defaultDesktopIde"`
+	// Clients specific IDE options.
+	Clients map[string]IDEClient `json:"clients"`
+}
+
+type IDEOption struct {
+	// OrderKey to ensure a stable order one can set an `orderKey`.
+	OrderKey string `json:"orderKey,omitempty"`
+	// Title with human readable text of the IDE (plain text only).
+	Title string `json:"title"`
+	// Type of the IDE, currently 'browser' or 'desktop'.
+	Type IDEType `json:"type"`
+	// Logo URL for the IDE. See also components/ide-proxy/static/image/ide-log/ folder
+	Logo string `json:"logo"`
+	// Tooltip plain text only
+	Tooltip string `json:"tooltip,omitempty"`
+	// Label is next to the IDE option like “Browser” (plain text only).
+	Label string `json:"label,omitempty"`
+	// Notes to the IDE option that are rendered in the preferences when a user chooses this IDE.
+	Notes []string `json:"notes,omitempty"`
+	// Hidden this IDE option is not visible in the IDE preferences.
+	Hidden bool `json:"hidden,omitempty"`
+	// Experimental this IDE option is to only be shown to some users
+	Experimental bool `json:"experimental,omitempty"`
+	// Image ref to the IDE image.
+	Image string `json:"image"`
+	// LatestImage ref to the IDE image, this image ref always resolve to digest.
+	LatestImage string `json:"latestImage,omitempty"`
+	// ResolveImageDigest when this is `true`, the tag of this image is resolved to the latest image digest regularly.
+	// This is useful if this image points to a tag like `nightly` that will be updated regularly. When `resolveImageDigest` is `true`, we make sure that we resolve the tag regularly to the most recent image version.
+	ResolveImageDigest bool `json:"resolveImageDigest,omitempty"`
+	// PluginImage ref for the IDE image, this image ref always resolve to digest.
+	// DEPRECATED use ImageLayers instead
+	PluginImage string `json:"pluginImage,omitempty"`
+	// PluginLatestImage ref for the latest IDE image, this image ref always resolve to digest.
+	// DEPRECATED use LatestImageLayers instead
+	PluginLatestImage string `json:"pluginLatestImage,omitempty"`
+	// ImageVersion the semantic version of the IDE image.
+	ImageVersion string `json:"imageVersion,omitempty"`
+	// LatestImageVersion the semantic version of the latest IDE image.
+	LatestImageVersion string `json:"latestImageVersion,omitempty"`
+	// ImageLayers for additional ide layers and dependencies
+	ImageLayers []string `json:"imageLayers,omitempty"`
+	// LatestImageLayers for latest additional ide layers and dependencies
+	LatestImageLayers []string `json:"latestImageLayers,omitempty"`
+}
+
+type IDEClient struct {
+	// DefaultDesktopIDE when the user has not specified one.
+	DefaultDesktopIDE string `json:"defaultDesktopIDE,omitempty"`
+	// DesktopIDEs supported by the client.
+	DesktopIDEs []string `json:"desktopIDEs,omitempty"`
+	// InstallationSteps to install the client on user machine.
+	InstallationSteps []string `json:"installationSteps,omitempty"`
+}
+
+type GetDefaultWorkspaceImageParams struct {
+	WorkspaceID string `json:"workspaceId,omitempty"`
+}
+
+type WorkspaceImageSource string
+
+const (
+	WorkspaceImageSourceInstallation WorkspaceImageSource = "installation"
+	WorkspaceImageSourceOrganization WorkspaceImageSource = "organization"
+)
+
+type GetDefaultWorkspaceImageResult struct {
+	Image  string               `json:"image,omitempty"`
+	Source WorkspaceImageSource `json:"source,omitempty"`
 }

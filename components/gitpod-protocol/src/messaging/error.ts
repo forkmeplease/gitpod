@@ -7,7 +7,7 @@
 import { scrubber } from "../util/scrubbing";
 
 export class ApplicationError extends Error {
-    constructor(public readonly code: ErrorCode, message: string, public readonly data?: any) {
+    constructor(readonly code: ErrorCode, readonly message: string, readonly data?: any) {
         super(message);
         this.data = scrubber.scrub(this.data, true);
     }
@@ -23,7 +23,7 @@ export class ApplicationError extends Error {
 
 export namespace ApplicationError {
     export function hasErrorCode(e: any): e is Error & { code: ErrorCode; data?: any } {
-        return e && e.code !== undefined;
+        return ErrorCode.is(e["code"]);
     }
 
     export async function notFoundToUndefined<T>(p: Promise<T>): Promise<T | undefined> {
@@ -41,6 +41,12 @@ export namespace ApplicationError {
 export namespace ErrorCode {
     export function isUserError(code: number | ErrorCode) {
         return code >= 400 && code < 500;
+    }
+    export function is(code: any): code is ErrorCode {
+        if (typeof code !== "number") {
+            return false;
+        }
+        return Object.values(ErrorCodes).includes(code as ErrorCode);
     }
 }
 
@@ -74,9 +80,6 @@ export const ErrorCodes = {
     // 430 Repository not whitelisted (custom status code)
     REPOSITORY_NOT_WHITELISTED: 430 as const,
 
-    // 440 Prebuilds now always require a project (custom status code)
-    PROJECT_REQUIRED: 440 as const,
-
     // 451 Out of credits
     PAYMENT_SPENDING_LIMIT_REACHED: 451 as const,
 
@@ -104,14 +107,26 @@ export const ErrorCodes = {
     // 481 Professional plan is required for this operation
     PLAN_PROFESSIONAL_REQUIRED: 481 as const,
 
+    // 482 Cell Expired
+    CELL_EXPIRED: 482 as const,
+
     // 490 Too Many Running Workspace
     TOO_MANY_RUNNING_WORKSPACES: 490 as const,
+
+    // 498 The operation was cancelled, typically by the caller.
+    CANCELLED: 498 as const,
+
+    // 4981 The deadline expired before the operation could complete.
+    DEADLINE_EXCEEDED: 4981 as const,
 
     // 500 Internal Server Error
     INTERNAL_SERVER_ERROR: 500 as const,
 
     // 501 EE Feature
     EE_FEATURE: 501 as const,
+
+    // 521 Unimplemented
+    UNIMPLEMENTED: 521 as const,
 
     // 555 EE License Required
     EE_LICENSE_REQUIRED: 555 as const,

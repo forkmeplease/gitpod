@@ -8,12 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	env "github.com/Netflix/go-env"
@@ -183,8 +184,12 @@ type IDEConfig struct {
 	} `json:"prebuild"`
 }
 
+func (c IDEConfig) GetUniqueKey() string {
+	return c.Name + "-" + c.Version
+}
+
 func (c IDEConfig) PrebuildTaskName() string {
-	return "ide-prebuild-" + c.Name
+	return "ide-prebuild-" + c.GetUniqueKey()
 }
 
 // Validate validates this configuration.
@@ -243,6 +248,17 @@ type WorkspaceConfig struct {
 	// WorkspaceClassInfo denotes the detail of workspace class
 	WorkspaceClassInfo *WorkspaceClassInfo `env:"GITPOD_WORKSPACE_CLASS_INFO"`
 
+	// DefaultWorkspaceImage is the default image of current workspace
+	DefaultWorkspaceImage string `env:"GITPOD_DEFAULT_WORKSPACE_IMAGE"`
+
+	// IsSetJavaXmx is a flag to indicate if the JAVA_XMX environment variable is set
+	// value retrieved from server with FeatureFlag
+	IsSetJavaXmx bool `env:"GITPOD_IS_SET_JAVA_XMX"`
+
+	// IsSetJavaProcessorCount is a flag to indicate if the JAVA_PROCESSOR_COUNT environment variable is set
+	// value retrieved from server with FeatureFlag
+	IsSetJavaProcessorCount bool `env:"GITPOD_IS_SET_JAVA_PROCESSOR_COUNT"`
+
 	// IDEPort is the port at which the IDE will need to run on. This is not an IDE config
 	// because Gitpod determines this port, not the IDE.
 	IDEPort int `env:"GITPOD_THEIA_PORT"`
@@ -257,7 +273,7 @@ type WorkspaceConfig struct {
 	// is located. If there's no Git repo in this workspace, this will be empty.
 	RepoRoot string `env:"GITPOD_REPO_ROOT"`
 
-	// RepoRoots is the comma seprated list of locations in the filesystem where Git repositories
+	// RepoRoots is the comma separated list of locations in the filesystem where Git repositories
 	// are located. If there's no Git repo in this workspace, this will be empty.
 	RepoRoots string `env:"GITPOD_REPO_ROOTS"`
 
@@ -274,6 +290,9 @@ type WorkspaceConfig struct {
 	GitUsername string `env:"GITPOD_GIT_USER_NAME"`
 	// GitEmail makes supervisor configure the global user.email Git setting.
 	GitEmail string `env:"GITPOD_GIT_USER_EMAIL"`
+
+	// CommitAnnotationEnabled controls whether to annotate commits with the Gitpod instance host
+	CommitAnnotationEnabled bool `env:"GITPOD_COMMIT_ANNOTATION_ENABLED"`
 
 	// Tokens is a JSON encoded list of WorkspaceGitpodToken
 	Tokens string `env:"THEIA_SUPERVISOR_TOKENS"`
@@ -293,6 +312,9 @@ type WorkspaceConfig struct {
 	// GitpodHeadless controls whether the workspace is running headless
 	GitpodHeadless string `env:"GITPOD_HEADLESS"`
 
+	// BobDockerfilePath is the path to the Dockerfile image builder will attempt to build
+	BobDockerfilePath string `env:"BOB_DOCKERFILE_PATH"`
+
 	// DebugEnabled controls whether the supervisor debugging facilities (pprof, grpc tracing) should be enabled
 	DebugEnable bool `env:"SUPERVISOR_DEBUG_ENABLE"`
 
@@ -302,8 +324,8 @@ type WorkspaceConfig struct {
 	// WorkspaceClusterHost is a host under which this workspace is served, e.g. ws-eu11.gitpod.io
 	WorkspaceClusterHost string `env:"GITPOD_WORKSPACE_CLUSTER_HOST"`
 
-	// DotfileRepo is a user-configurable repository which contains their dotfiles to customise
-	// the in-workspace epxerience.
+	// DotfileRepo is a user-configurable repository which contains their dotfiles to customize
+	// the in-workspace experience.
 	DotfileRepo string `env:"SUPERVISOR_DOTFILE_REPO"`
 
 	// EnvvarOTS points to a URL from which environment variables for child processes can be downloaded from.
@@ -326,6 +348,8 @@ type WorkspaceConfig struct {
 
 	// ConfigcatEnabled controls whether configcat is enabled
 	ConfigcatEnabled bool `env:"GITPOD_CONFIGCAT_ENABLED"`
+
+	SSHGatewayCAPublicKey string `env:"GITPOD_SSH_CA_PUBLIC_KEY"`
 }
 
 // WorkspaceGitpodToken is a list of tokens that should be added to supervisor's token service.
@@ -450,6 +474,11 @@ func (c WorkspaceConfig) isDebugWorkspace() bool {
 	return c.DebugWorkspaceType != api.DebugWorkspaceType_noDebug
 }
 
+// isImageBuild returns true if the workspace is an image build.
+func (c WorkspaceConfig) isImageBuild() bool {
+	return c.BobDockerfilePath != ""
+}
+
 var contentSources = map[api.ContentSource]csapi.WorkspaceInitSource{
 	api.ContentSource_from_other:    csapi.WorkspaceInitFromOther,
 	api.ContentSource_from_backup:   csapi.WorkspaceInitFromBackup,
@@ -496,7 +525,7 @@ func (c Config) getGitpodTasks() (tasks []TaskConfig, err error) {
 				entrypoint = ideConfig.Entrypoint
 			}
 
-			init := fmt.Sprintf("echo 'Prebuilding %s (%s)'; ", ideConfig.DisplayName, ideConfig.Version)
+			init := fmt.Sprintf("echo 'Prebuilding %s (%s) (%s)'; ", ideConfig.DisplayName, ideConfig.Version, ideConfig.GetUniqueKey())
 			init += entrypoint
 			for _, arg := range ideConfig.Prebuild.Args {
 				init = init + " " + arg
@@ -581,10 +610,10 @@ func loadDesktopIDEs(static *StaticConfig) ([]*IDEConfig, error) {
 	}
 	if desktopIDE != nil {
 		desktopIDEs = append(desktopIDEs, desktopIDE)
-		uniqueDesktopIDEs[desktopIDE.Name] = struct{}{}
+		uniqueDesktopIDEs[desktopIDE.GetUniqueKey()] = struct{}{}
 	}
 
-	files, err := ioutil.ReadDir(static.DesktopIDERoot)
+	files, err := os.ReadDir(static.DesktopIDERoot)
 	if err != nil {
 		return nil, err
 	}
@@ -597,15 +626,19 @@ func loadDesktopIDEs(static *StaticConfig) ([]*IDEConfig, error) {
 			if err != nil {
 				return nil, err
 			}
-			_, alreadyPresent := uniqueDesktopIDEs[desktopIDE.Name]
+			_, alreadyPresent := uniqueDesktopIDEs[desktopIDE.GetUniqueKey()]
 			if alreadyPresent {
-				log.WithField("name", desktopIDE.Name).Warn("ignoring duplicate desktop IDE")
+				log.WithField("key", desktopIDE.GetUniqueKey()).Warn("ignoring duplicate desktop IDE")
 				continue
 			}
 			desktopIDEs = append(desktopIDEs, desktopIDE)
 			uniqueDesktopIDEs[desktopIDE.Name] = struct{}{}
 		}
 	}
+
+	slices.SortFunc(desktopIDEs, func(a, b *IDEConfig) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 
 	return desktopIDEs, nil
 }
@@ -672,10 +705,6 @@ func loadWorkspaceConfigFromEnv() (*WorkspaceConfig, error) {
 	_, err := env.UnmarshalFromEnviron(&res)
 	if err != nil {
 		return nil, xerrors.Errorf("cannot load workspace config: %w", err)
-	}
-	//TODO(sefftinge) remove me after deployment (backward compatibility)
-	if res.RepoRoots == "" {
-		res.RepoRoots = res.RepoRoot
 	}
 
 	return &res, nil

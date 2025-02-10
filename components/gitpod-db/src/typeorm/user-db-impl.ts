@@ -15,6 +15,7 @@ import {
     TokenEntry,
     User,
     UserEnvVar,
+    UserEnvVarValue,
     UserSSHPublicKey,
 } from "@gitpod/gitpod-protocol";
 import { EncryptionService } from "@gitpod/gitpod-protocol/lib/encryption/encryption-service";
@@ -28,7 +29,7 @@ import {
     OAuthUser,
 } from "@jmondi/oauth2-server";
 import { inject, injectable, optional } from "inversify";
-import { EntityManager, Repository } from "typeorm";
+import { EntityManager, Equal, FindOperator, Not, Repository } from "typeorm";
 import { v4 as uuidv4 } from "uuid";
 import {
     BUILTIN_WORKSPACE_PROBE_USER_ID,
@@ -37,6 +38,7 @@ import {
     MaybeUser,
     PartialUserUpdate,
     UserDB,
+    isBuiltinUser,
 } from "../user-db";
 import { DBGitpodToken } from "./entity/db-gitpod-token";
 import { DBIdentity } from "./entity/db-identity";
@@ -48,6 +50,8 @@ import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 import { DataCache } from "../data-cache";
 import { TransactionalDBImpl } from "./transactional-db-impl";
 import { TypeORM } from "./typeorm";
+import { ApplicationError, ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
+import { filter } from "../utils";
 
 // OAuth token expiry
 const tokenExpiryInFuture = new DateInterval("7d");
@@ -131,6 +135,9 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
     }
 
     public async findUserById(id: string): Promise<MaybeUser> {
+        if (!id || id.trim() === "") {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "Cannot find user without id");
+        }
         return this.cache.get(getUserCacheKey(id), async () => {
             const userRepo = await this.getUserRepo();
             const result = await userRepo.findOne(id);
@@ -220,7 +227,6 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
         } else {
             qBuilder.where("gitpodToken.tokenHash = :tokenHash", { tokenHash });
         }
-        qBuilder.andWhere("gitpodToken.deleted <> TRUE");
         const token = await qBuilder.getOne();
         if (!token) {
             return;
@@ -255,27 +261,12 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
 
     public async deleteGitpodToken(tokenHash: string): Promise<void> {
         const repo = await this.getGitpodTokenRepo();
-        await repo.query(
-            `
-                UPDATE d_b_gitpod_token AS gt
-                SET gt.deleted = TRUE
-                WHERE tokenHash = ?;
-            `,
-            [tokenHash],
-        );
+        await repo.delete({ tokenHash });
     }
 
     public async deleteGitpodTokensNamedLike(userId: string, namePattern: string): Promise<void> {
         const repo = await this.getGitpodTokenRepo();
-        await repo.query(
-            `
-            UPDATE d_b_gitpod_token AS gt
-            SET gt.deleted = TRUE
-            WHERE userId = ?
-              AND name LIKE ?
-        `,
-            [userId, namePattern],
-        );
+        await repo.delete({ userId, name: new FindOperator("like", namePattern) });
     }
 
     public async storeSingleToken(identity: Identity, token: Token): Promise<TokenEntry> {
@@ -291,6 +282,7 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
             authId: identity.authId,
             token: token,
             expiryDate: token.expiryDate,
+            reservedUntilDate: token.reservedUntilDate,
             refreshable: !!token.refreshToken,
         };
         return await repo.save(entry);
@@ -308,16 +300,14 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
 
     public async deleteExpiredTokenEntries(date: string): Promise<void> {
         const repo = await this.getTokenRepo();
-        await repo.query(
-            `
-            UPDATE d_b_token_entry AS te
-                SET te.deleted = TRUE
-                WHERE te.expiryDate != ''
-                    AND te.refreshable != 1
-                    AND te.expiryDate <= ?;
-            `,
-            [date],
-        );
+        await repo
+            .createQueryBuilder()
+            .delete()
+            .from(DBTokenEntry)
+            .where("expiryDate != ''")
+            .andWhere("refreshable != 1")
+            .andWhere("expiryDate <= :date", { date })
+            .execute();
     }
 
     public async updateTokenEntry(tokenEntry: Partial<TokenEntry> & Pick<TokenEntry, "uid">): Promise<void> {
@@ -330,13 +320,12 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
         const repo = await this.getTokenRepo();
         for (const existing of existingTokens) {
             if (!shouldDelete || shouldDelete(existing)) {
-                existing.deleted = true;
-                await repo.save(existing);
+                await repo.delete(existing.uid);
             }
         }
     }
 
-    public async findTokenForIdentity(identity: Identity): Promise<Token | undefined> {
+    public async findTokenEntryForIdentity(identity: Identity): Promise<TokenEntry | undefined> {
         const tokenEntries = await this.findTokensForIdentity(identity);
         if (tokenEntries.length > 1) {
             // TODO(gpl) This line is very noisy thus we don't want it to be a warning. Still we need to keep track,
@@ -349,18 +338,24 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
         const latestTokenEntry = tokenEntries
             .sort((a, b) => `${a.token.updateDate}`.localeCompare(`${b.token.updateDate}`))
             .reverse()[0];
-        if (latestTokenEntry) {
-            if (latestTokenEntry.expiryDate !== latestTokenEntry.token.expiryDate) {
-                log.info(`Overriding 'expiryDate' of token to get refreshed on demand.`, { identity });
-            }
-            return { ...latestTokenEntry.token, expiryDate: latestTokenEntry.expiryDate };
+        if (!latestTokenEntry) {
+            return undefined;
         }
+        return {
+            ...latestTokenEntry,
+            token: {
+                // Take dates from the TokenEntry, as only those are being updated in the DB atm
+                ...latestTokenEntry.token,
+                expiryDate: latestTokenEntry.expiryDate,
+                reservedUntilDate: latestTokenEntry.reservedUntilDate,
+            },
+        };
     }
 
-    public async findTokensForIdentity(identity: Identity, includeDeleted?: boolean): Promise<TokenEntry[]> {
+    public async findTokensForIdentity(identity: Identity): Promise<TokenEntry[]> {
         const repo = await this.getTokenRepo();
         const entry = await repo.find({ authProviderId: identity.authProviderId, authId: identity.authId });
-        return entry.filter((te) => includeDeleted || !te.deleted);
+        return entry;
     }
 
     private mapUserToDBUser(user: User): DBUser {
@@ -393,12 +388,49 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
         }
         const res = await userRepo.query(query);
         const count = res[0].cnt;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         return Number.parseInt(count);
     }
 
-    public async setEnvVar(envVar: UserEnvVar): Promise<void> {
+    public async findEnvVar(userId: string, envVar: UserEnvVarValue): Promise<UserEnvVar | undefined> {
         const repo = await this.getUserEnvVarRepo();
-        await repo.save(envVar);
+        return repo.findOne({
+            where: {
+                userId,
+                name: envVar.name,
+                repositoryPattern: envVar.repositoryPattern,
+                deleted: Not(Equal(true)),
+            },
+        });
+    }
+
+    public async addEnvVar(userId: string, envVar: UserEnvVarValue): Promise<UserEnvVar> {
+        const repo = await this.getUserEnvVarRepo();
+        return await repo.save({
+            id: uuidv4(),
+            userId,
+            name: envVar.name,
+            repositoryPattern: envVar.repositoryPattern,
+            value: envVar.value,
+        });
+    }
+
+    public async updateEnvVar(userId: string, envVar: Partial<UserEnvVarValue>): Promise<UserEnvVar | undefined> {
+        if (!envVar.id) {
+            throw new ApplicationError(ErrorCodes.NOT_FOUND, "An environment variable with this ID could not be found");
+        }
+
+        return await this.transaction(async (_, ctx) => {
+            const envVarRepo = ctx.entityManager.getRepository<DBUserEnvVar>(DBUserEnvVar);
+
+            await envVarRepo.update(
+                { id: envVar.id, userId, deleted: false },
+                filter(envVar, (_, v) => v !== null && v !== undefined),
+            );
+
+            const found = await envVarRepo.findOne({ id: envVar.id, userId, deleted: false });
+            return found;
+        });
     }
 
     public async getEnvVars(userId: string): Promise<UserEnvVar[]> {
@@ -408,25 +440,24 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
     }
 
     public async deleteEnvVar(envVar: UserEnvVar): Promise<void> {
-        envVar.deleted = true;
         const repo = await this.getUserEnvVarRepo();
-        await repo.save(envVar);
+        await repo.update({ userId: envVar.userId, id: envVar.id }, { deleted: true });
     }
 
     public async hasSSHPublicKey(userId: string): Promise<boolean> {
         const repo = await this.getSSHPublicKeyRepo();
-        return !!(await repo.findOne({ where: { userId, deleted: false } }));
+        return !!(await repo.findOne({ where: { userId } }));
     }
 
     public async getSSHPublicKeys(userId: string): Promise<UserSSHPublicKey[]> {
         const repo = await this.getSSHPublicKeyRepo();
-        return repo.find({ where: { userId, deleted: false }, order: { creationTime: "ASC" } });
+        return repo.find({ where: { userId }, order: { creationTime: "ASC" } });
     }
 
     public async addSSHPublicKey(userId: string, value: SSHPublicKeyValue): Promise<UserSSHPublicKey> {
         const repo = await this.getSSHPublicKeyRepo();
         const fingerprint = SSHPublicKeyValue.getFingerprint(value);
-        const allKeys = await repo.find({ where: { userId, deleted: false } });
+        const allKeys = await repo.find({ where: { userId } });
         const prevOne = allKeys.find((e) => e.fingerprint === fingerprint);
         if (!!prevOne) {
             throw new Error(`Key already in use`);
@@ -452,7 +483,7 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
 
     public async deleteSSHPublicKey(userId: string, id: string): Promise<void> {
         const repo = await this.getSSHPublicKeyRepo();
-        await repo.update({ userId, id }, { deleted: true });
+        await repo.delete({ userId, id });
     }
 
     public async findAllUsers(
@@ -540,7 +571,7 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
             accessTokenExpiresAt: expiry,
             client,
             user,
-            scopes: scopes,
+            scopes,
         };
     }
     async issueRefreshToken(accessToken: OAuthToken): Promise<OAuthToken> {
@@ -584,7 +615,7 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
     }
     async revoke(accessTokenToken: OAuthToken): Promise<void> {
         const tokenHash = crypto.createHash("sha256").update(accessTokenToken.accessToken, "utf8").digest("hex");
-        this.deleteGitpodToken(tokenHash);
+        await this.deleteGitpodToken(tokenHash);
     }
     async isRefreshTokenRevoked(refreshToken: OAuthToken): Promise<boolean> {
         return Date.now() > (refreshToken.refreshTokenExpiresAt?.getTime() ?? 0);
@@ -635,5 +666,17 @@ export class TypeORMUserDBImpl extends TransactionalDBImpl<UserDB> implements Us
             return undefined;
         }
         return this.mapDBUserToUser(result);
+    }
+
+    async findUserIdsNotYetMigratedToFgaVersion(fgaRelationshipsVersion: number, limit: number): Promise<string[]> {
+        const userRepo = await this.getUserRepo();
+        const users = await userRepo
+            .createQueryBuilder("user")
+            .where("fgaRelationshipsVersion != :fgaRelationshipsVersion", { fgaRelationshipsVersion })
+            .andWhere("markedDeleted != true")
+            .orderBy("_lastModified", "DESC")
+            .limit(limit)
+            .getMany();
+        return users.map((user) => user.id).filter((id) => !isBuiltinUser(id));
     }
 }

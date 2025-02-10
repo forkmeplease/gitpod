@@ -5,7 +5,7 @@
  */
 
 import { injectable, inject } from "inversify";
-import * as express from "express";
+import express from "express";
 import { SessionHandler } from "../session-handler";
 import { Authenticator } from "../auth/authenticator";
 import { UserAuthentication } from "../user/user-authentication";
@@ -16,8 +16,8 @@ import { reportJWTCookieIssued } from "../prometheus-metrics";
 import { ApplicationError } from "@gitpod/gitpod-protocol/lib/messaging/error";
 import { OrganizationService } from "../orgs/organization-service";
 import { UserService } from "../user/user-service";
-import { UserDB } from "@gitpod/gitpod-db/lib";
-import { SYSTEM_USER } from "../authorization/authorizer";
+import { SYSTEM_USER, SYSTEM_USER_ID } from "../authorization/authorizer";
+import { runWithSubjectId, runWithRequestContext } from "../util/request-context";
 
 @injectable()
 export class IamSessionApp {
@@ -28,7 +28,6 @@ export class IamSessionApp {
         @inject(UserService) private readonly userService: UserService,
         @inject(OrganizationService) private readonly orgService: OrganizationService,
         @inject(SessionHandler) private readonly session: SessionHandler,
-        @inject(UserDB) private readonly userDb: UserDB,
     ) {}
 
     public getMiddlewares() {
@@ -41,9 +40,21 @@ export class IamSessionApp {
             app.use(middleware);
         });
 
+        // Use RequestContext
+        app.use((req, res, next) => {
+            runWithRequestContext(
+                {
+                    requestKind: "iam-session-app",
+                    requestMethod: req.path,
+                    signal: new AbortController().signal,
+                },
+                () => next(),
+            );
+        });
+
         app.post("/session", async (req: express.Request, res: express.Response) => {
             try {
-                const result = await this.doCreateSession(req, res);
+                const result = await runWithSubjectId(SYSTEM_USER, async () => this.doCreateSession(req, res));
                 res.status(200).json(result);
             } catch (error) {
                 log.error("Error creating session on behalf of IAM", error);
@@ -66,6 +77,22 @@ export class IamSessionApp {
         const existingUser = await this.findExistingOIDCUser(payload);
         if (existingUser) {
             await this.updateOIDCUserOnSignin(existingUser, payload);
+
+            try {
+                //TODO we need to fix users without a team membership that happened because of a bug in the past
+                // this is a workaround to fix the issue for now, but should be removed after a while
+                if (existingUser.organizationId) {
+                    await this.orgService.addOrUpdateMember(
+                        SYSTEM_USER_ID,
+                        existingUser.organizationId,
+                        existingUser.id,
+                        "member",
+                        { flexibleRole: true, skipRoleUpdate: true },
+                    );
+                }
+            } catch (error) {
+                log.error("Error fixing user team membership", error);
+            }
         }
 
         const user = existingUser || (await this.createNewOIDCUser(payload));
@@ -128,7 +155,7 @@ export class IamSessionApp {
                 primaryEmail: recent.primaryEmail,
                 lastSigninTime: new Date().toISOString(),
             });
-            await this.userService.updateUser(user.id, {
+            await this.userService.updateUser(SYSTEM_USER_ID, {
                 id: user.id,
                 fullName: payload.claims.name,
             });
@@ -138,23 +165,15 @@ export class IamSessionApp {
     private async createNewOIDCUser(payload: OIDCCreateSessionPayload): Promise<User> {
         const { claims, organizationId } = payload;
 
-        return this.userDb.transaction(async (_, ctx) => {
-            // Until we support SKIM (or any other means to sync accounts) we create new users here as a side-effect of the login
-            const user = await this.userService.createUser(
-                {
-                    organizationId,
-                    identity: { ...this.mapOIDCProfileToIdentity(payload), lastSigninTime: new Date().toISOString() },
-                    userUpdate: (user) => {
-                        user.fullName = claims.name;
-                        user.name = claims.name;
-                        user.avatarUrl = claims.picture;
-                    },
-                },
-                ctx,
-            );
-
-            await this.orgService.addOrUpdateMember(SYSTEM_USER, organizationId, user.id, "member", ctx);
-            return user;
+        // Until we support SKIM (or any other means to sync accounts) we create new users here as a side-effect of the login
+        return this.orgService.createOrgOwnedUser({
+            organizationId,
+            identity: { ...this.mapOIDCProfileToIdentity(payload), lastSigninTime: new Date().toISOString() },
+            userUpdate: (user) => {
+                user.fullName = claims.name;
+                user.name = claims.name;
+                user.avatarUrl = claims.picture;
+            },
         });
     }
 }

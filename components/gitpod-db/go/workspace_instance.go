@@ -80,10 +80,12 @@ func FindRunningWorkspaceInstances(ctx context.Context, conn *gorm.DB) ([]Worksp
 	var instancesInBatch []WorkspaceInstanceForUsage
 
 	tx := queryWorkspaceInstanceForUsage(ctx, conn).
-		Where("wsi.stoppingTime = ?", "").
-		Where("wsi.usageAttributionId != ?", "").
+		Where("wsi.phasePersisted = ?", "running").
 		// We are only interested in instances that have been started within the last 10 days.
 		Where("wsi.startedTime > ?", TimeToISO8601(time.Now().Add(-10*24*time.Hour))).
+		// All other selectors are there to ensure data quality
+		Where("wsi.stoppingTime = ?", "").
+		Where("wsi.usageAttributionId != ?", "").
 		FindInBatches(&instancesInBatch, 1000, func(_ *gorm.DB, _ int) error {
 			instances = append(instances, instancesInBatch...)
 			return nil
@@ -133,6 +135,7 @@ func queryWorkspaceInstanceForUsage(ctx context.Context, conn *gorm.DB) *gorm.DB
 			"ws.type as workspaceType, "+
 			"wsi.workspaceClass as workspaceClass, "+
 			"wsi.usageAttributionId as usageAttributionId, "+
+			"wsi.creationTime as creationTime, "+
 			"wsi.startedTime as startedTime, "+
 			"wsi.stoppingTime as stoppingTime, "+
 			"wsi.stoppedTime as stoppedTime, "+
@@ -204,6 +207,7 @@ type WorkspaceInstanceForUsage struct {
 	UserName           string         `gorm:"column:userName;type:varchar;size:255;" json:"userName"`
 	UserAvatarURL      string         `gorm:"column:userAvatarURL;type:varchar;size:255;" json:"userAvatarURL"`
 
+	CreationTime VarcharTime `gorm:"column:creationTime;type:varchar;size:255;" json:"creationTime"`
 	StartedTime  VarcharTime `gorm:"column:startedTime;type:varchar;size:255;" json:"startedTime"`
 	StoppingTime VarcharTime `gorm:"column:stoppingTime;type:varchar;size:255;" json:"stoppingTime"`
 	StoppedTime  VarcharTime `gorm:"column:stoppedTime;type:varchar;size:255;" json:"stoppedTime"`

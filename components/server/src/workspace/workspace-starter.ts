@@ -19,6 +19,7 @@ import {
     DBWithTracing,
     ProjectDB,
     RedisPublisher,
+    TeamDB,
     TracedUserDB,
     TracedWorkspaceDB,
     UserDB,
@@ -31,6 +32,7 @@ import {
     CommitContext,
     Disposable,
     DisposableCollection,
+    EnvVar,
     GitCheckoutInfo,
     GitpodServer,
     GitpodToken,
@@ -45,6 +47,7 @@ import {
     RefType,
     SnapshotContext,
     StartWorkspaceResult,
+    TaskConfig,
     User,
     WithPrebuild,
     WithReferrerContext,
@@ -55,14 +58,14 @@ import {
     WorkspaceImageSourceReference,
     WorkspaceInstance,
     WorkspaceInstanceConfiguration,
+    WorkspaceInstancePhase,
     WorkspaceInstanceStatus,
     WorkspaceTimeoutDuration,
 } from "@gitpod/gitpod-protocol";
-import { IAnalyticsWriter } from "@gitpod/gitpod-protocol/lib/analytics";
+import { IAnalyticsWriter, TrackMessage } from "@gitpod/gitpod-protocol/lib/analytics";
 import { AttributionId } from "@gitpod/gitpod-protocol/lib/attribution";
 import { Deferred } from "@gitpod/gitpod-protocol/lib/util/deferred";
 import { LogContext, log } from "@gitpod/gitpod-protocol/lib/util/logging";
-import { repeat } from "@gitpod/gitpod-protocol/lib/util/repeat";
 import { TraceContext } from "@gitpod/gitpod-protocol/lib/util/tracing";
 import { WorkspaceRegion } from "@gitpod/gitpod-protocol/lib/workspace-cluster";
 import * as IdeServiceApi from "@gitpod/ide-service-api/lib/ide.pb";
@@ -78,7 +81,6 @@ import {
     BuildStatus,
     ImageBuilderClientProvider,
     ResolveBaseImageRequest,
-    ResolveWorkspaceImageRequest,
 } from "@gitpod/image-builder/lib";
 import {
     IDEImage,
@@ -95,11 +97,12 @@ import {
     PortSpec,
     PortVisibility,
     StartWorkspaceRequest,
-    StopWorkspacePolicy,
-    StopWorkspaceRequest,
     WorkspaceMetadata,
     WorkspaceType,
     PortProtocol,
+    StopWorkspacePolicy,
+    StopWorkspaceRequest,
+    DescribeWorkspaceRequest,
 } from "@gitpod/ws-manager/lib/core_pb";
 import * as grpc from "@grpc/grpc-js";
 import * as crypto from "crypto";
@@ -110,7 +113,7 @@ import { HostContextProvider } from "../auth/host-context-provider";
 import { ScopedResourceGuard } from "../auth/resource-access";
 import { EntitlementService } from "../billing/entitlement-service";
 import { Config } from "../config";
-import { IDEService } from "../ide-service";
+import { ExtendedIDESettings, IDEService } from "../ide-service";
 import { OneTimeSecretServer } from "../one-time-secret-server";
 import {
     FailedInstanceStartReason,
@@ -123,26 +126,39 @@ import { RedisMutex } from "../redis/mutex";
 import { AuthorizationService } from "../user/authorization-service";
 import { TokenProvider } from "../user/token-provider";
 import { UserAuthentication } from "../user/user-authentication";
-import { ResolvedEnvVars } from "./env-var-service";
 import { ImageSourceProvider } from "./image-source-provider";
 import { WorkspaceClassesConfig } from "./workspace-classes";
+import { SYSTEM_USER, SYSTEM_USER_ID } from "../authorization/authorizer";
+import { EnvVarService, ResolvedEnvVars } from "../user/env-var-service";
+import { RedlockAbortSignal } from "redlock";
+import { ConfigProvider } from "./config-provider";
+import { isGrpcError } from "@gitpod/gitpod-protocol/lib/util/grpc";
+import { getExperimentsClientForBackend } from "@gitpod/gitpod-protocol/lib/experiments/configcat-server";
+import { ctxIsAborted, runWithRequestContext, runWithSubjectId } from "../util/request-context";
+import { SubjectId } from "../auth/subject-id";
+import { ApplicationError, ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
+import { IDESettingsVersion } from "@gitpod/gitpod-protocol/lib/ide-protocol";
+import { getFeatureFlagEnableExperimentalJBTB } from "../util/featureflags";
+import { OrganizationService } from "../orgs/organization-service";
+import { ProjectsService } from "../projects/projects-service";
+import { ImageFileRevisionMissing } from "../repohost";
 
-export interface StartWorkspaceOptions extends GitpodServer.StartWorkspaceOptions {
-    rethrow?: boolean;
+export interface StartWorkspaceOptions extends Omit<GitpodServer.StartWorkspaceOptions, "ideSettings"> {
     excludeFeatureFlags?: NamedWorkspaceFeatureFlag[];
+    ideSettings?: ExtendedIDESettings;
 }
 
 const MAX_INSTANCE_START_RETRIES = 2;
 const INSTANCE_START_RETRY_INTERVAL_SECONDS = 2;
+/** [mins] */
+const SCM_TOKEN_LIFETIME_MINS = 30;
 
 export async function getWorkspaceClassForInstance(
     ctx: TraceContext,
-    workspace: Workspace,
-    previousInstance: WorkspaceInstance | undefined,
-    user: User,
+    workspace: Pick<Workspace, "type">,
+    previousInstance: Pick<WorkspaceInstance, "workspaceClass"> | undefined,
     project: Project | undefined,
     workspaceClassOverride: string | undefined,
-    entitlementService: EntitlementService,
     config: WorkspaceClassesConfig,
 ): Promise<string> {
     const span = TraceContext.startSpan("getWorkspaceClassForInstance", ctx);
@@ -157,7 +173,10 @@ export async function getWorkspaceClassForInstance(
         if (!workspaceClass) {
             switch (workspace.type) {
                 case "prebuild":
-                    workspaceClass = project?.settings?.workspaceClasses?.prebuild;
+                    if (project) {
+                        const prebuildSettings = Project.getPrebuildSettings(project);
+                        workspaceClass = prebuildSettings.workspaceClass;
+                    }
                     break;
                 case "regular":
                     workspaceClass = project?.settings?.workspaceClasses?.regular;
@@ -174,7 +193,7 @@ export async function getWorkspaceClassForInstance(
 }
 
 class StartInstanceError extends Error {
-    constructor(public readonly reason: FailedInstanceStartReason, public readonly cause: Error) {
+    constructor(public readonly reason: FailedInstanceStartReason, public readonly cause: any) {
         super("Starting workspace instance failed: " + cause.message);
     }
 }
@@ -194,9 +213,12 @@ export function isClusterMaintenanceError(err: any): boolean {
 
 @injectable()
 export class WorkspaceStarter {
+    static readonly STARTING_PHASES: WorkspaceInstancePhase[] = ["preparing", "building", "pending"];
+
     constructor(
         @inject(WorkspaceManagerClientProvider) private readonly clientProvider: WorkspaceManagerClientProvider,
         @inject(Config) private readonly config: Config,
+        @inject(ConfigProvider) private readonly configProvider: ConfigProvider,
         @inject(IDEService) private readonly ideService: IDEService,
         @inject(TracedWorkspaceDB) private readonly workspaceDb: DBWithTracing<WorkspaceDB>,
         @inject(TracedUserDB) private readonly userDB: DBWithTracing<UserDB>,
@@ -209,18 +231,22 @@ export class WorkspaceStarter {
         @inject(IAnalyticsWriter) private readonly analytics: IAnalyticsWriter,
         @inject(OneTimeSecretServer) private readonly otsServer: OneTimeSecretServer,
         @inject(ProjectDB) private readonly projectDB: ProjectDB,
+        @inject(TeamDB) private readonly orgDB: TeamDB,
         @inject(BlockedRepositoryDB) private readonly blockedRepositoryDB: BlockedRepositoryDB,
         @inject(EntitlementService) private readonly entitlementService: EntitlementService,
         @inject(RedisMutex) private readonly redisMutex: RedisMutex,
         @inject(RedisPublisher) private readonly publisher: RedisPublisher,
+        @inject(EnvVarService) private readonly envVarService: EnvVarService,
+        @inject(OrganizationService) private readonly orgService: OrganizationService,
+        @inject(ProjectsService) private readonly projectService: ProjectsService,
     ) {}
+
     public async startWorkspace(
         ctx: TraceContext,
         workspace: Workspace,
         user: User,
         project: Project | undefined,
-        envVars: ResolvedEnvVars,
-        options?: StartWorkspaceOptions,
+        options: StartWorkspaceOptions,
     ): Promise<StartWorkspaceResult> {
         const span = TraceContext.startSpan("WorkspaceStarter.startWorkspace", ctx);
         span.setTag("workspaceId", workspace.id);
@@ -233,10 +259,10 @@ export class WorkspaceStarter {
                 .catch((err) => log.error("cannot update project usage", err));
         }
 
-        options = options || {};
         let instanceId: string | undefined = undefined;
         try {
-            await this.checkBlockedRepository(user, workspace.contextURL);
+            await this.checkStartPermission(user, workspace, project);
+            await this.checkBlockedRepository(user, workspace);
 
             // Some workspaces do not have an image source.
             // Workspaces without image source are not only legacy, but also happened due to what looks like a bug.
@@ -251,6 +277,17 @@ export class WorkspaceStarter {
                     workspace.context as CommitContext,
                     workspace.config,
                 );
+                if (
+                    WorkspaceImageSourceDocker.is(imageSource) &&
+                    imageSource.dockerFileHash === ImageFileRevisionMissing
+                ) {
+                    const revision = (workspace.context as CommitContext).revision;
+                    // we let the workspace create here and let it fail to build the image
+                    imageSource.dockerFileHash = revision;
+                    if (imageSource.dockerFileSource) {
+                        imageSource.dockerFileSource.revision = revision;
+                    }
+                }
                 log.debug("Found workspace without imageSource, generated one", { imageSource });
 
                 workspace.imageSource = imageSource;
@@ -258,16 +295,14 @@ export class WorkspaceStarter {
             }
 
             if (options.forceDefaultImage) {
-                const req = new ResolveBaseImageRequest();
-                req.setRef(this.config.workspaceDefaults.workspaceImage);
-                const allowAll = new BuildRegistryAuthTotal();
-                allowAll.setAllowAll(true);
-                const auth = new BuildRegistryAuth();
-                auth.setTotal(allowAll);
-                req.setAuth(auth);
-
-                const client = await this.getImageBuilderClient(user, workspace, undefined, options?.region);
-                const res = await client.resolveBaseImage({ span }, req);
+                const res = await this.resolveBaseImage(
+                    { span },
+                    user,
+                    this.config.workspaceDefaults.workspaceImage,
+                    workspace,
+                    undefined,
+                    options.region,
+                );
                 workspace.imageSource = <WorkspaceImageSourceReference>{
                     baseImageResolved: res.getRef(),
                 };
@@ -291,12 +326,25 @@ export class WorkspaceStarter {
             if (lastValidWorkspaceInstance) {
                 const ideConfig = lastValidWorkspaceInstance.configuration?.ideConfig;
                 if (ideConfig?.ide) {
+                    const enableExperimentalJBTB = await getFeatureFlagEnableExperimentalJBTB(user.id);
+                    const preferToolbox = !enableExperimentalJBTB
+                        ? false
+                        : ideSettings?.preferToolbox ??
+                          user.additionalData?.ideSettings?.preferToolbox ??
+                          ideConfig.preferToolbox ??
+                          false;
                     ideSettings = {
+                        ...ideSettings,
                         defaultIde: ideConfig.ide,
-                        useLatestVersion: !!ideConfig.useLatest,
+                        useLatestVersion:
+                            ideSettings?.useLatestVersion ??
+                            user.additionalData?.ideSettings?.useLatestVersion ??
+                            !!ideConfig.useLatest,
+                        preferToolbox,
                     };
                 }
             }
+            const fromBackup = !!lastValidWorkspaceInstance?.id;
             const ideConfig = await this.resolveIDEConfiguration(ctx, workspace, user, ideSettings);
             // create an instance
             let instance = await this.newInstance(
@@ -307,6 +355,8 @@ export class WorkspaceStarter {
                 project,
                 options.excludeFeatureFlags || [],
                 ideConfig,
+                fromBackup,
+                options.region,
                 options.workspaceClass,
             );
             // we run the actual creation of a new instance in a distributed lock, to make sure we always only start one instance per workspace.
@@ -320,61 +370,10 @@ export class WorkspaceStarter {
             span.log({ newInstance: instance.id });
             instanceId = instance.id;
 
-            const forceRebuild = !!workspace.context.forceImageBuild;
+            // start the instance
+            await this.reconcileWorkspaceStart({ span }, instance.id, user, workspace);
 
-            let needsImageBuild: boolean;
-            try {
-                // if we need to build the workspace image we must not wait for actuallyStartWorkspace to return as that would block the
-                // frontend until the image is built.
-                const additionalAuth = await this.getAdditionalImageAuth(envVars);
-                needsImageBuild =
-                    forceRebuild ||
-                    (await this.needsImageBuild({ span }, user, workspace, instance, additionalAuth, options?.region));
-                if (needsImageBuild) {
-                    instance.status.conditions = {
-                        neededImageBuild: true,
-                    };
-                }
-                span.setTag("needsImageBuild", needsImageBuild);
-            } catch (err) {
-                // if we fail to check if the workspace needs an image build (e.g. becuase the image builder is unavailable),
-                // we must properly fail the workspace instance, i.e. set its status to stopped, deal with prebuilds etc.
-                //
-                // Once we've reached actuallyStartWorkspace that function will take care of failing the instance.
-                await this.failInstanceStart({ span }, err, workspace, instance);
-                throw err;
-            }
-
-            // If the caller requested that errors be rethrown we must await the actual workspace start to be in the exception path.
-            // To this end we disable the needsImageBuild behaviour if rethrow is true.
-            if (needsImageBuild && !options.rethrow) {
-                this.actuallyStartWorkspace(
-                    { span },
-                    instance,
-                    workspace,
-                    user,
-                    lastValidWorkspaceInstance?.id ?? "",
-                    ideConfig,
-                    envVars,
-                    options.rethrow,
-                    forceRebuild,
-                    options?.region,
-                ).catch((err) => log.error("actuallyStartWorkspace", err));
-                return { instanceID: instance.id };
-            }
-
-            return await this.actuallyStartWorkspace(
-                { span },
-                instance,
-                workspace,
-                user,
-                lastValidWorkspaceInstance?.id ?? "",
-                ideConfig,
-                envVars,
-                options.rethrow,
-                forceRebuild,
-                options?.region,
-            );
+            return { instanceID: instance.id };
         } catch (e) {
             this.logAndTraceStartWorkspaceError({ span }, { userId: user.id, instanceId }, e);
             throw e;
@@ -383,11 +382,79 @@ export class WorkspaceStarter {
         }
     }
 
+    public async reconcileWorkspaceStart(_ctx: TraceContext, instanceId: string, user: User, workspace: Workspace) {
+        const ctx = TraceContext.childContext("reconcileWorkspaceStart", _ctx);
+
+        const doReconcileWorkspaceStart = async (abortSignal: RedlockAbortSignal) => {
+            await runWithRequestContext(
+                {
+                    requestKind: "workspace-start",
+                    requestMethod: "reconcileWorkspaceStart",
+                    signal: abortSignal,
+                    subjectId: SubjectId.fromUserId(user.id),
+                },
+                async () => {
+                    try {
+                        // Fetch a fresh instance to check it's phase
+                        const instance = await this.workspaceDb.trace({}).findInstanceById(instanceId);
+                        if (!instance) {
+                            ctx.span.finish();
+                            throw new Error("cannot find workspace for instance");
+                        }
+                        if (!WorkspaceStarter.STARTING_PHASES.includes(instance.status.phase)) {
+                            log.debug(
+                                { instanceId, workspaceId: instance.workspaceId, userId: user.id },
+                                "can't start workspace instance in this phase",
+                                { phase: instance.status.phase },
+                            );
+                            return;
+                        }
+
+                        const envVars = await this.envVarService.resolveEnvVariables(
+                            user.id,
+                            workspace.organizationId,
+                            workspace.projectId,
+                            workspace.type,
+                            workspace.context,
+                            workspace.config,
+                        );
+
+                        await this.actuallyStartWorkspace(ctx, instance, workspace, user, envVars);
+                    } catch (err) {
+                        this.logAndTraceStartWorkspaceError(
+                            ctx,
+                            { userId: user.id, workspaceId: workspace.id, instanceId },
+                            err,
+                        );
+                    } finally {
+                        ctx.span.finish();
+                    }
+                },
+            );
+        };
+
+        // We try to acquire a mutex here, which we intend to hold until the workspace start request is sent to ws-manager.
+        // In case this container dies for whatever reason, the mutex is eventually released, and the instance can be picked up
+        // by another server process (cmp. WorkspaceStartController).
+        this.redisMutex
+            .using(
+                ["workspace-instance-start-" + instanceId],
+                5000, // After 5s without extension the lock is released
+                doReconcileWorkspaceStart,
+                { retryCount: 4, retryDelay: 500 }, // We wait at most 2s until we give up, and conclude that someone else is already starting this instance
+            )
+            .catch((err) => {
+                if (!RedisMutex.isLockedError(err)) {
+                    log.warn({ instanceId }, "unexpected error during workspace instance start", err);
+                }
+            });
+    }
+
     private async resolveIDEConfiguration(
         ctx: TraceContext,
         workspace: Workspace,
         user: User,
-        userSelectedIdeSettings?: IDESettings,
+        userSelectedIdeSettings?: ExtendedIDESettings,
     ) {
         const span = TraceContext.startSpan("resolveIDEConfiguration", ctx);
         try {
@@ -401,7 +468,7 @@ export class WorkspaceStarter {
                 // A user does not have IDE settings configured yet configure it with a referrer ide as default.
                 const additionalData = user?.additionalData || {};
                 const settings = additionalData.ideSettings || {};
-                settings.settingVersion = "2.0";
+                settings.settingVersion = IDESettingsVersion;
                 settings.defaultIde = workspace.context.referrerIde;
                 additionalData.ideSettings = settings;
                 user.additionalData = additionalData;
@@ -438,7 +505,7 @@ export class WorkspaceStarter {
             client = await this.clientProvider.get(instanceRegion);
         } catch (err) {
             log.error({ instanceId }, "cannot stop workspace instance", err);
-            // we want to stop a workspace but the region doesn't exist. So we can assume it doesn't run anyymore and there will never be updates coming to bridge.
+            // we want to stop a workspace but the region doesn't exist. So we can assume it doesn't run anymore and there will never be updates coming to bridge.
             // let's mark this workspace as stopped if it is not already stopped.
             const workspace = await this.workspaceDb.trace(ctx).findByInstanceId(instanceId);
             const instance = await this.workspaceDb.trace(ctx).findInstanceById(instanceId);
@@ -466,41 +533,61 @@ export class WorkspaceStarter {
         await client.stopWorkspace(ctx, req);
     }
 
-    public async stopRunningWorkspacesForUser(
-        ctx: TraceContext,
-        userID: string,
-        reason: string,
-        policy?: StopWorkspacePolicy,
-    ): Promise<Workspace[]> {
-        const workspaceDb = this.workspaceDb.trace(ctx);
-        const instances = await workspaceDb.findRunningInstancesWithWorkspaces(undefined, userID);
-        await Promise.all(
-            instances.map((instance) =>
-                this.stopWorkspaceInstance(
-                    ctx,
-                    instance.latestInstance.id,
-                    instance.latestInstance.region,
-                    reason,
-                    policy,
-                ),
-            ),
-        );
-        return instances.map((instance) => instance.workspace);
-    }
-
-    private async checkBlockedRepository(user: User, contextURL: string) {
+    private async checkBlockedRepository(user: User, { contextURL, organizationId }: Workspace) {
         const blockedRepository = await this.blockedRepositoryDB.findBlockedRepositoryByURL(contextURL);
         if (!blockedRepository) return;
 
         if (blockedRepository.blockUser) {
             try {
-                await this.userService.blockUser(user.id, true);
+                await runWithSubjectId(SYSTEM_USER, async () =>
+                    this.userService.blockUser(SYSTEM_USER_ID, user.id, true),
+                );
                 log.info({ userId: user.id }, "Blocked user.", { contextURL });
             } catch (error) {
                 log.error({ userId: user.id }, "Failed to block user.", error, { contextURL });
             }
         }
-        throw new Error(`${contextURL} is blocklisted on Gitpod.`);
+        if (blockedRepository.blockFreeUsage) {
+            const tier = await this.entitlementService.getBillingTier(user.id, organizationId);
+            if (tier === "free") {
+                throw new ApplicationError(
+                    ErrorCodes.PRECONDITION_FAILED,
+                    `${contextURL} requires a paid plan on Gitpod.`,
+                );
+            }
+        }
+        if (!blockedRepository.blockFreeUsage) {
+            throw new ApplicationError(ErrorCodes.PRECONDITION_FAILED, `${contextURL} is blocklisted on Gitpod.`);
+        }
+    }
+
+    private async checkStartPermission(user: User, workspace: Workspace, project?: Project) {
+        // explicit project
+        if (project) {
+            return;
+        }
+
+        const { organizationId, contextURL } = workspace;
+
+        const membership = await this.orgDB.findTeamMembership(user.id, organizationId);
+        if (!membership) {
+            return;
+        }
+
+        // check if user's role is restricted from starting arbitrary repositories
+        const organizationSettings = await this.orgService.getSettings(user.id, organizationId);
+        if (!organizationSettings?.roleRestrictions?.[membership.role]?.includes("start_arbitrary_repositories")) {
+            return;
+        }
+
+        // implicit project (existing on the same clone URL). We skip the permission check so that collaborators are not stuck
+        const projects = await this.projectService.findProjectsByCloneUrl(user.id, contextURL, organizationId, true);
+        if (projects.length === 0) {
+            throw new ApplicationError(
+                ErrorCodes.PRECONDITION_FAILED,
+                "Unable to start workspace: This repository has not been imported. Your role is restricted to using only imported repositories for workspace creation. Please contact your organization owner to import this repository or modify permissions.",
+            );
+        }
     }
 
     // Note: this function does not expect to be awaited for by its caller. This means that it takes care of error handling itself.
@@ -509,17 +596,41 @@ export class WorkspaceStarter {
         instance: WorkspaceInstance,
         workspace: Workspace,
         user: User,
-        lastValidWorkspaceInstanceId: string,
-        ideConfig: IdeServiceApi.ResolveWorkspaceConfigResponse,
         envVars: ResolvedEnvVars,
-        rethrow?: boolean,
-        forceRebuild?: boolean,
-        region?: WorkspaceRegion,
-    ): Promise<StartWorkspaceResult> {
+    ): Promise<void> {
         const span = TraceContext.startSpan("actuallyStartWorkspace", ctx);
+        const region = instance.configuration.regionPreference;
         span.setTag("region_preference", region);
+        const logCtx: LogContext = {
+            instanceId: instance.id,
+            userId: user.id,
+            organizationId: workspace.organizationId,
+            workspaceId: workspace.id,
+        };
+        const forceRebuild = !!workspace.context.forceImageBuild;
+        log.info(logCtx, "Attempting to start workspace", {
+            forceRebuild: forceRebuild,
+        });
 
+        // choose a cluster and start the instance
+        let resp: StartWorkspaceResponse.AsObject | undefined = undefined;
+        let startRequest: StartWorkspaceRequest;
+        let retries = 0;
+        let failReason: FailedInstanceStartReason = "other";
         try {
+            if (instance.status.phase === "pending") {
+                // due to the reconciliation loop we might have already started the workspace, especially in the "pending" phase
+                const workspaceAlreadyExists = await this.existsWithWsManager(ctx, instance);
+                if (workspaceAlreadyExists) {
+                    log.debug(
+                        { instanceId: instance.id, workspaceId: instance.workspaceId },
+                        "workspace already exists, not starting again",
+                        { phase: instance.status.phase },
+                    );
+                    return;
+                }
+            }
+
             // build workspace image
             const additionalAuth = await this.getAdditionalImageAuth(envVars);
             instance = await this.buildWorkspaceImage(
@@ -528,147 +639,110 @@ export class WorkspaceStarter {
                 workspace,
                 instance,
                 additionalAuth,
-                ideConfig,
                 forceRebuild,
                 forceRebuild,
                 region,
             );
 
-            let type: WorkspaceType = WorkspaceType.REGULAR;
-            if (workspace.type === "prebuild") {
-                type = WorkspaceType.PREBUILD;
-            }
-
             // create spec
-            const spec = await this.createSpec(
-                { span },
-                user,
-                workspace,
-                instance,
-                lastValidWorkspaceInstanceId,
-                ideConfig,
-                envVars,
-            );
+            const spec = await this.createSpec({ span }, user, workspace, instance, envVars);
 
             // create start workspace request
             const metadata = await this.createMetadata(workspace);
-            const startRequest = new StartWorkspaceRequest();
+            startRequest = new StartWorkspaceRequest();
             startRequest.setId(instance.id);
             startRequest.setMetadata(metadata);
-            startRequest.setType(type);
+            startRequest.setType(workspace.type === "prebuild" ? WorkspaceType.PREBUILD : WorkspaceType.REGULAR);
             startRequest.setSpec(spec);
             startRequest.setServicePrefix(workspace.id);
 
-            const ideUrlPromise = new Deferred<string>();
-            const before = Date.now();
-            const logSuccess = (fromWsManager: boolean) => {
-                log.info(
-                    {
-                        instanceId: instance.id,
-                        userId: workspace.ownerId,
-                        workspaceId: workspace.id,
-                    },
-                    "Received ideURL",
-                    {
-                        tookMs: Date.now() - before,
-                        fromWsManager,
-                    },
-                );
-            };
-
-            const doStartWorkspace = async () => {
-                // choose a cluster and start the instance
-                let resp: StartWorkspaceResponse.AsObject | undefined = undefined;
-                let retries = 0;
-                try {
-                    for (; retries < MAX_INSTANCE_START_RETRIES; retries++) {
-                        resp = await this.tryStartOnCluster({ span }, startRequest, user, workspace, instance, region);
-                        if (resp) {
-                            break;
-                        }
-                        await new Promise((resolve) =>
-                            setTimeout(resolve, INSTANCE_START_RETRY_INTERVAL_SECONDS * 1000),
-                        );
-                    }
-                } catch (err) {
-                    let reason: FailedInstanceStartReason = "startOnClusterFailed";
-                    if (isResourceExhaustedError(err)) {
-                        reason = "resourceExhausted";
-                    }
-                    if (isClusterMaintenanceError(err)) {
-                        reason = "workspaceClusterMaintenance";
-                        err = new Error(
-                            "Cannot start a workspace because the workspace cluster is temporarily unavailable due to maintenance. Please try again in a few minutes",
-                        );
-                    }
-                    await this.failInstanceStart({ span }, err, workspace, instance);
-                    throw new StartInstanceError(reason, err);
+            // try to start the workspace on a cluster
+            failReason = "startOnClusterFailed";
+            for (; retries < MAX_INSTANCE_START_RETRIES; retries++) {
+                if (ctxIsAborted()) {
+                    return;
                 }
-
-                if (!resp) {
-                    const err = new Error("cannot start a workspace because no workspace clusters are available");
-                    await this.failInstanceStart({ span }, err, workspace, instance);
-                    throw new StartInstanceError("clusterSelectionFailed", err);
+                resp = await this.tryStartOnCluster({ span }, startRequest, user, workspace, instance, region);
+                if (resp) {
+                    break;
                 }
-                increaseSuccessfulInstanceStartCounter(retries);
-
-                if (!ideUrlPromise.isResolved) {
-                    span.log({ resp: resp });
-                    logSuccess(true);
-                    ideUrlPromise.resolve(resp.url);
-                }
-            };
-            doStartWorkspace().catch((err) => ideUrlPromise.reject(err));
-
-            const intervalHandle = repeat(async () => {
-                const inst = await this.workspaceDb.trace(ctx).findInstanceById(instance.id);
-                if (inst?.ideUrl && !ideUrlPromise.isResolved) {
-                    logSuccess(false);
-                    ideUrlPromise.resolve(inst?.ideUrl);
-                }
-            }, 50);
-
-            try {
-                const url = await ideUrlPromise.promise;
-
-                this.analytics.track({
-                    userId: user.id,
-                    event: "workspace_started",
-                    properties: {
-                        workspaceId: workspace.id,
-                        instanceId: instance.id,
-                        projectId: workspace.projectId,
-                        contextURL: workspace.contextURL,
-                        type: workspace.type,
-                        class: instance.workspaceClass,
-                        ideConfig: instance.configuration?.ideConfig,
-                        usesPrebuild: spec.getInitializer()?.hasPrebuild(),
-                    },
-                    timestamp: new Date(instance.creationTime),
-                });
-
-                {
-                    if (type === WorkspaceType.PREBUILD) {
-                        // do not await
-                        this.notifyOnPrebuildQueued(ctx, workspace.id).catch((err) => {
-                            log.error("failed to notify on prebuild queued", err);
-                        });
-                    }
-                }
-
-                return { instanceID: instance.id, workspaceURL: url };
-            } finally {
-                intervalHandle.dispose();
+                await new Promise((resolve) => setTimeout(resolve, INSTANCE_START_RETRY_INTERVAL_SECONDS * 1000));
             }
+
+            if (!resp) {
+                const err = new Error("cannot start a workspace because no workspace clusters are available");
+                await this.failInstanceStart({ span }, err, workspace, instance);
+                throw new StartInstanceError("clusterSelectionFailed", err);
+            }
+            increaseSuccessfulInstanceStartCounter(retries);
+
+            const trackProperties: TrackMessage["properties"] = {
+                workspaceId: workspace.id,
+                instanceId: instance.id,
+                projectId: workspace.projectId,
+                contextURL: workspace.contextURL,
+                type: workspace.type,
+                class: instance.workspaceClass,
+                ideConfig: instance.configuration?.ideConfig,
+                usesPrebuild: startRequest.getSpec()?.getInitializer()?.hasPrebuild(),
+            };
+
+            if (workspace.projectId && trackProperties.usesPrebuild && workspace.type === "regular") {
+                const project = await this.projectDB.findProjectById(workspace.projectId);
+                trackProperties.prebuildTriggerStrategy =
+                    project?.settings?.prebuilds?.triggerStrategy ?? "webhook-based";
+            }
+
+            // update analytics
+            this.analytics.track({
+                userId: user.id,
+                event: "workspace_started",
+                properties: trackProperties,
+                timestamp: new Date(instance.creationTime),
+            });
         } catch (err) {
-            if (rethrow) {
-                throw err;
-            } else {
-                this.logAndTraceStartWorkspaceError({ span }, { userId: user.id, instanceId: instance.id }, err);
+            if (isGrpcError(err) && err.code === grpc.status.ALREADY_EXISTS) {
+                // This might happen because of timing: When we did the "workspaceAlreadyExists" check above, the DB state was not updated yet.
+                // But when calling ws-manager to start the workspace, it was already present.
+                //
+                // By returning we skip the current cycle and wait for the next run of the workspace-start-controller.
+                // This gives ws-manager(-bridge) some time to emit(/digest) updates.
+                log.info(logCtx, "workspace already exists, waiting for ws-manager to push new state", err);
+                return;
             }
 
-            return { instanceID: instance.id };
+            if (isGrpcError(err) && err.code === grpc.status.UNAVAILABLE) {
+                // fall-through: we don't want to fail but retry/wait for future updates to resolve this
+                log.warn(logCtx, "cannot start workspace instance due to temporary error", err);
+                return;
+            }
+
+            if (ScmStartError.isScmStartError(err)) {
+                // user does not have access to SCM
+                await this.failInstanceStart({ span }, err, workspace, instance);
+                err = new StartInstanceError("scmAccessFailed", err);
+            }
+
+            if (!(err instanceof StartInstanceError)) {
+                // Serves as a catch-all for those cases that we have failed to map before
+                if (isResourceExhaustedError(err)) {
+                    failReason = "resourceExhausted";
+                }
+                if (isClusterMaintenanceError(err)) {
+                    failReason = "workspaceClusterMaintenance";
+                    err = new Error(
+                        "We're in the middle of an update. We'll be back to normal soon. Please try again in a few minutes.",
+                    );
+                }
+                await this.failInstanceStart({ span }, err, workspace, instance);
+                err = new StartInstanceError(failReason, err);
+            }
+
+            this.logAndTraceStartWorkspaceError({ span }, logCtx, err);
         } finally {
+            if (ctxIsAborted()) {
+                ctx.span?.setTag("aborted", true);
+            }
             span.finish();
         }
     }
@@ -707,9 +781,20 @@ export class WorkspaceStarter {
         instance: WorkspaceInstance,
         region?: WorkspaceRegion,
     ): Promise<StartWorkspaceResponse.AsObject | undefined> {
+        const constrainOnWorkspaceClassSupport = await isWorkspaceClassDiscoveryEnabled(user);
+
         let lastInstallation = "";
-        const clusters = await this.clientProvider.getStartClusterSets(user, workspace, instance, region);
+        const clusters = await this.clientProvider.getStartClusterSets(
+            user,
+            workspace,
+            instance,
+            region,
+            constrainOnWorkspaceClassSupport,
+        );
         for await (const cluster of clusters) {
+            if (ctxIsAborted()) {
+                return;
+            }
             try {
                 // getStartManager will throw an exception if there's no cluster available and hence exit the loop
                 const { manager, installation } = cluster;
@@ -739,6 +824,8 @@ export class WorkspaceStarter {
                     throw err;
                 } else if (isClusterMaintenanceError(err)) {
                     throw err;
+                } else if (isGrpcError(err) && err.code === grpc.status.ALREADY_EXISTS) {
+                    throw err;
                 } else if ("code" in err && err.code !== grpc.status.OK && lastInstallation !== "") {
                     log.error({ instanceId: instance.id }, "cannot start workspace on cluster, might retry", err, {
                         cluster: lastInstallation,
@@ -754,14 +841,12 @@ export class WorkspaceStarter {
 
     private async getAdditionalImageAuth(envVars: ResolvedEnvVars): Promise<Map<string, string>> {
         const res = new Map<string, string>();
-        const imageAuth = envVars.project.find((e) => e.name === "GITPOD_IMAGE_AUTH");
+        const imageAuth = envVars.workspace.find((e) => e.name === EnvVar.GITPOD_IMAGE_AUTH_ENV_VAR_NAME);
         if (!imageAuth) {
             return res;
         }
 
-        const imageAuthValue = (await this.projectDB.getProjectEnvironmentVariableValues([imageAuth]))[0];
-
-        (imageAuthValue.value || "")
+        (imageAuth.value || "")
             .split(",")
             .map((e) => e.trim().split(":"))
             .filter((e) => e.length == 2)
@@ -769,42 +854,23 @@ export class WorkspaceStarter {
         return res;
     }
 
-    private async notifyOnPrebuildQueued(ctx: TraceContext, workspaceId: string) {
-        const span = TraceContext.startSpan("notifyOnPrebuildQueued", ctx);
-        try {
-            const prebuild = await this.workspaceDb.trace({ span }).findPrebuildByWorkspaceID(workspaceId);
-            if (prebuild) {
-                const info = (await this.workspaceDb.trace({ span }).findPrebuildInfos([prebuild.id]))[0];
-                if (info) {
-                    await this.publisher.publishPrebuildUpdate({
-                        prebuildID: prebuild.id,
-                        projectID: info.projectId,
-                        status: "queued",
-                        workspaceID: workspaceId,
-                    });
-                }
-            }
-        } catch (e) {
-            TraceContext.setError({ span }, e);
-            throw e;
-        } finally {
-            span.finish();
-        }
-    }
-
     /**
      * failInstanceStart properly fails a workspace instance if something goes wrong before the instance ever reaches
-     * workspace manager. In this case we need to make sure we also fulfil the tasks of the bridge (e.g. for prebulds).
+     * workspace manager. In this case we need to make sure we also fulfil the tasks of the bridge (e.g. for prebuilds).
      */
-    private async failInstanceStart(ctx: TraceContext, err: Error, workspace: Workspace, instance: WorkspaceInstance) {
-        const span = TraceContext.startSpan("failInstanceStart", ctx);
+    private async failInstanceStart(ctx: TraceContext, err: any, workspace: Workspace, instance: WorkspaceInstance) {
+        if (ctxIsAborted()) {
+            return;
+        }
 
+        const span = TraceContext.startSpan("failInstanceStart", ctx);
         try {
             // We may have never actually started the workspace which means that ws-manager-bridge never set a workspace status.
             // We have to set that status ourselves.
             instance.status.phase = "stopped";
-            instance.stoppingTime = new Date().toISOString();
-            instance.stoppedTime = new Date().toISOString();
+            const now = new Date().toISOString();
+            instance.stoppingTime = now;
+            instance.stoppedTime = now;
 
             instance.status.conditions.failed = err.toString();
             instance.status.message = `Workspace cannot be started: ${err}`;
@@ -829,12 +895,12 @@ export class WorkspaceStarter {
         }
     }
 
-    private async failPrebuildWorkspace(ctx: TraceContext, err: Error, workspace: Workspace) {
+    private async failPrebuildWorkspace(ctx: TraceContext, err: any, workspace: Workspace) {
         const span = TraceContext.startSpan("failInstanceStart", ctx);
         try {
             if (workspace.type === "prebuild") {
                 const prebuild = await this.workspaceDb.trace({ span }).findPrebuildByWorkspaceID(workspace.id);
-                if (prebuild && prebuild.state !== "failed") {
+                if (prebuild && prebuild.state !== "failed" && prebuild.projectId) {
                     prebuild.state = "failed";
                     prebuild.error = err.toString();
 
@@ -842,6 +908,13 @@ export class WorkspaceStarter {
                     await this.publisher.publishHeadlessUpdate({
                         type: HeadlessWorkspaceEventType.Failed,
                         workspaceID: workspace.id,
+                    });
+                    await this.publisher.publishPrebuildUpdate({
+                        status: "failed",
+                        prebuildID: prebuild.id,
+                        projectID: prebuild.projectId,
+                        workspaceID: workspace.id,
+                        organizationID: workspace.organizationId,
                     });
                 }
             }
@@ -866,10 +939,23 @@ export class WorkspaceStarter {
         project: Project | undefined,
         excludeFeatureFlags: NamedWorkspaceFeatureFlag[],
         ideConfig: IdeServiceApi.ResolveWorkspaceConfigResponse,
+        fromBackup: boolean,
+        regionPreference: WorkspaceRegion | undefined,
         workspaceClassOverride?: string,
     ): Promise<WorkspaceInstance> {
         const span = TraceContext.startSpan("newInstance", ctx);
         try {
+            let ideTasks: TaskConfig[] = [];
+            try {
+                if (ideConfig.tasks && ideConfig.tasks.trim() !== "") {
+                    ideTasks = JSON.parse(ideConfig.tasks);
+                }
+            } catch (e) {
+                log.info({ workspaceId: workspace.id }, "failed parse tasks from ide config:", e, {
+                    tasks: ideConfig.tasks,
+                });
+            }
+
             const configuration: WorkspaceInstanceConfiguration = {
                 ideImage: ideConfig.webImage,
                 ideImageLayers: ideConfig.ideImageLayers,
@@ -879,12 +965,22 @@ export class WorkspaceStarter {
                     // it still need to notice user that this workspace is using latest IDE
                     useLatest: user.additionalData?.ideSettings?.useLatestVersion,
                 },
+                ideSetup: {
+                    envvars: ideConfig.envvars,
+                    tasks: ideTasks,
+                },
+                regionPreference,
+                fromBackup,
             };
             if (ideConfig.ideSettings && ideConfig.ideSettings.trim() !== "") {
                 try {
+                    const enableExperimentalJBTB = await getFeatureFlagEnableExperimentalJBTB(user.id);
                     const ideSettings: IDESettings = JSON.parse(ideConfig.ideSettings);
                     configuration.ideConfig!.ide = ideSettings.defaultIde;
                     configuration.ideConfig!.useLatest = !!ideSettings.useLatestVersion;
+                    configuration.ideConfig!.preferToolbox = !enableExperimentalJBTB
+                        ? false
+                        : ideSettings.preferToolbox ?? false;
                 } catch (error) {
                     log.error({ userId: user.id, workspaceId: workspace.id }, "cannot parse ideSettings", error);
                 }
@@ -921,14 +1017,16 @@ export class WorkspaceStarter {
                 featureFlags.push("workspace_psi");
             }
 
+            if (await this.shouldEnableSSHCA(user, workspace.organizationId)) {
+                featureFlags.push("ssh_ca");
+            }
+
             const workspaceClass = await getWorkspaceClassForInstance(
                 ctx,
                 workspace,
                 previousInstance,
-                user,
                 project,
                 workspaceClassOverride,
-                this.entitlementService,
                 this.config.workspaceClasses,
             );
 
@@ -954,6 +1052,7 @@ export class WorkspaceStarter {
                     conditions: {},
                     phase: "preparing",
                 },
+                gitStatus: previousInstance?.gitStatus,
                 configuration,
                 usageAttributionId: usageAttributionId && AttributionId.render(usageAttributionId),
                 workspaceClass,
@@ -981,6 +1080,13 @@ export class WorkspaceStarter {
         return this.entitlementService.limitNetworkConnections(userId, organizationId);
     }
 
+    private async shouldEnableSSHCA(user: User, organizationId: string): Promise<boolean> {
+        return getExperimentsClientForBackend().getValueAsync("isSSHCertificateAuthoritiesEnabled", false, {
+            user: user,
+            teamId: organizationId,
+        });
+    }
+
     private shouldEnablePSI(billingTier: BillingTier): boolean {
         return billingTier === "paid";
     }
@@ -991,37 +1097,10 @@ export class WorkspaceStarter {
         imgsrc: WorkspaceImageSource,
         user: User,
         additionalAuth: Map<string, string>,
-        ignoreBaseImageresolvedAndRebuildBase: boolean = false,
     ): Promise<{ src: BuildSource; auth: BuildRegistryAuth; disposable?: Disposable }> {
         const span = TraceContext.startSpan("prepareBuildRequest", ctx);
 
         try {
-            // if our workspace ever had its base image built, we do not want to build it again. In this case we use a build source reference
-            // and dismiss the original image source.
-            if (workspace.baseImageNameResolved && !ignoreBaseImageresolvedAndRebuildBase) {
-                span.setTag("hasBaseImageNameResolved", true);
-                span.log({ baseImageNameResolved: workspace.baseImageNameResolved });
-
-                const ref = new BuildSourceReference();
-                ref.setRef(workspace.baseImageNameResolved);
-
-                const src = new BuildSource();
-                src.setRef(ref);
-
-                // It doesn't matter what registries the user has access to at this point.
-                // All they need access to is the base image repository, as we're building the Gitpod layer only.
-                const nauth = new BuildRegistryAuthSelective();
-                nauth.setAllowBaserep(true);
-                // The base image is not neccesarily stored on the Gitpod registry, but might also come
-                // from a private whitelisted registry also. Hence allowBaserep is not enough, and we also
-                // need to explicitly allow all whitelisted registry when resolving the base image.
-                nauth.setAnyOfList(this.config.defaultBaseImageRegistryWhitelist);
-                const auth = new BuildRegistryAuth();
-                auth.setSelective(nauth);
-
-                return { src, auth };
-            }
-
             const auth = new BuildRegistryAuth();
             const userHasRegistryAccess = this.authService.hasPermission(user, Permission.REGISTRY_ACCESS);
             if (userHasRegistryAccess) {
@@ -1074,7 +1153,7 @@ export class WorkspaceStarter {
                         workspace,
                         workspace.context,
                         user,
-                        "",
+                        false,
                     );
                     source = initializer;
                     disp.push(disposable);
@@ -1112,65 +1191,12 @@ export class WorkspaceStarter {
         }
     }
 
-    private async needsImageBuild(
-        ctx: TraceContext,
-        user: User,
-        workspace: Workspace,
-        instance: WorkspaceInstance,
-        additionalAuth: Map<string, string>,
-        region?: WorkspaceRegion,
-    ): Promise<boolean> {
-        const span = TraceContext.startSpan("needsImageBuild", ctx);
-        try {
-            const client = await this.getImageBuilderClient(user, workspace, instance, region);
-            const { src, auth, disposable } = await this.prepareBuildRequest(
-                { span },
-                workspace,
-                workspace.imageSource!,
-                user,
-                additionalAuth,
-            );
-
-            const req = new ResolveWorkspaceImageRequest();
-            req.setSource(src);
-            req.setAuth(auth);
-            const result = await client.resolveWorkspaceImage({ span }, req);
-
-            if (!!disposable) {
-                disposable.dispose();
-            }
-
-            if (result.getStatus() != BuildStatus.DONE_SUCCESS) {
-                log.info(
-                    {
-                        instanceId: instance.id,
-                        userId: workspace.ownerId,
-                        workspaceId: workspace.id,
-                        organizationId: workspace.organizationId,
-                    },
-                    "Resolve workspace was unsuccessful",
-                    {
-                        buildStatus: result.getStatus(),
-                    },
-                );
-            }
-
-            return result.getStatus() != BuildStatus.DONE_SUCCESS;
-        } catch (err) {
-            TraceContext.setError({ span }, err);
-            throw err;
-        } finally {
-            span.finish();
-        }
-    }
-
     private async buildWorkspaceImage(
         ctx: TraceContext,
         user: User,
         workspace: Workspace,
         instance: WorkspaceInstance,
         additionalAuth: Map<string, string>,
-        ideConfig: IdeServiceApi.ResolveWorkspaceConfigResponse,
         ignoreBaseImageresolvedAndRebuildBase: boolean = false,
         forceRebuild: boolean = false,
         region?: WorkspaceRegion,
@@ -1186,7 +1212,6 @@ export class WorkspaceStarter {
                 workspace.imageSource!,
                 user,
                 additionalAuth,
-                ignoreBaseImageresolvedAndRebuildBase || forceRebuild,
             );
 
             const req = new BuildRequest();
@@ -1194,7 +1219,13 @@ export class WorkspaceStarter {
             req.setAuth(auth);
             req.setForceRebuild(forceRebuild);
             req.setTriggeredBy(user.id);
-            req.setSupervisorRef(ideConfig.supervisorImage);
+            if (!ignoreBaseImageresolvedAndRebuildBase && !forceRebuild && workspace.baseImageNameResolved) {
+                req.setBaseImageNameResolved(workspace.baseImageNameResolved);
+            }
+            const supervisorImage = instance.configuration?.supervisorImage;
+            if (supervisorImage) {
+                req.setSupervisorRef(supervisorImage);
+            }
 
             // Make sure we persist logInfo as soon as we retrieve it
             const imageBuildLogInfo = new Deferred<ImageBuildLogInfo>();
@@ -1225,6 +1256,11 @@ export class WorkspaceStarter {
             const result = await client.build({ span }, req, imageBuildLogInfo);
 
             if (result.actuallyNeedsBuild) {
+                instance.status.conditions = {
+                    ...instance.status.conditions,
+                    neededImageBuild: true,
+                }; // Stored below
+                ctx.span?.setTag("needsImageBuild", true);
                 increaseImageBuildsStartedTotal();
             }
 
@@ -1269,7 +1305,6 @@ export class WorkspaceStarter {
                         workspace,
                         instance,
                         additionalAuth,
-                        ideConfig,
                         true,
                         forceRebuild,
                         region,
@@ -1308,26 +1343,14 @@ export class WorkspaceStarter {
             }
 
             // This instance's image build "failed" as well, so mark it as such.
-            const now = new Date().toISOString();
-            instance = await this.workspaceDb.trace({ span }).updateInstancePartial(instance.id, {
-                status: { ...instance.status, phase: "stopped", conditions: { failed: message }, message },
-                stoppedTime: now,
-                stoppingTime: now,
-            });
+            await this.failInstanceStart({ span }, err, workspace, instance);
 
-            // Mark the PrebuildWorkspace as failed
-            await this.failPrebuildWorkspace({ span }, err, workspace);
-
-            // Publish updated workspace instance
-            await this.publisher.publishInstanceUpdate({
-                workspaceID: workspace.ownerId,
-                instanceID: instance.id,
-                ownerID: workspace.ownerId,
-            });
-
-            TraceContext.setError({ span }, err);
             const looksLikeUserError = (msg: string): boolean => {
-                return msg.startsWith("build failed:") || msg.includes("headless task failed:");
+                return (
+                    msg.startsWith("build failed:") ||
+                    msg.includes("headless task failed:") ||
+                    msg.includes("cannot resolve image")
+                );
             };
             if (looksLikeUserError(message)) {
                 log.info(
@@ -1335,6 +1358,11 @@ export class WorkspaceStarter {
                     `workspace image build failed: ${message}`,
                     { looksLikeUserError: true },
                 );
+                err = new StartInstanceError(
+                    "imageBuildFailedUser",
+                    `workspace image build failed: ${message}. For further logs, try executing \`gp validate\` inside of a workspace`,
+                );
+                // Don't report this as "failed" to our metrics as it would trigger an alert
             } else {
                 log.error(
                     { instanceId: instance.id, userId: user.id, workspaceId: workspace.id },
@@ -1360,8 +1388,6 @@ export class WorkspaceStarter {
         user: User,
         workspace: Workspace,
         instance: WorkspaceInstance,
-        lastValidWorkspaceInstanceId: string,
-        ideConfig: IdeServiceApi.ResolveWorkspaceConfigResponse,
         envVars: ResolvedEnvVars,
     ): Promise<StartWorkspaceSpec> {
         const context = workspace.context;
@@ -1397,7 +1423,7 @@ export class WorkspaceStarter {
 
         log.debug("Workspace config", workspace.config);
 
-        const tasks = this.ideService.resolveGitpodTasks(workspace, ideConfig);
+        const tasks = resolveGitpodTasks(workspace, instance);
         if (tasks.length) {
             // The task config is interpreted by supervisor only, there's little point in transforming it into something
             // wsman understands and back into the very same structure.
@@ -1514,7 +1540,7 @@ export class WorkspaceStarter {
             workspace,
             workspace.context,
             user,
-            lastValidWorkspaceInstanceId,
+            instance.configuration.fromBackup || false,
         );
         const userTimeoutPromise = this.entitlementService.getDefaultWorkspaceTimeout(
             user.id,
@@ -1529,13 +1555,47 @@ export class WorkspaceStarter {
         const featureFlags = instance.configuration!.featureFlags || [];
 
         const sysEnvvars: EnvironmentVariable[] = [];
-        for (const e of ideConfig.envvars) {
+        const ideEnvVars = instance.configuration.ideSetup?.envvars || [];
+        for (const e of ideEnvVars) {
             const ev = new EnvironmentVariable();
             ev.setName(e.name);
             ev.setValue(e.value);
             sysEnvvars.push(ev);
         }
 
+        const organizationSettings = await this.orgService.getSettings(user.id, workspace.organizationId);
+        sysEnvvars.push(
+            newEnvVar("GITPOD_COMMIT_ANNOTATION_ENABLED", organizationSettings.annotateGitCommits ? "true" : "false"),
+        );
+
+        const orgIdEnv = new EnvironmentVariable();
+        orgIdEnv.setName("GITPOD_DEFAULT_WORKSPACE_IMAGE");
+        orgIdEnv.setValue(await this.configProvider.getDefaultImage(workspace.organizationId));
+        sysEnvvars.push(orgIdEnv);
+
+        const client = getExperimentsClientForBackend();
+        const [isSetJavaXmx, isSetJavaProcessorCount, disableJetBrainsLocalPortForwarding] = await Promise.all([
+            client
+                .getValueAsync("supervisor_set_java_xmx", false, { user })
+                .then((v) => newEnvVar("GITPOD_IS_SET_JAVA_XMX", String(v))),
+            client
+                .getValueAsync("supervisor_set_java_processor_count", false, { user })
+                .then((v) => newEnvVar("GITPOD_IS_SET_JAVA_PROCESSOR_COUNT", String(v))),
+            client
+                .getValueAsync("disable_jetbrains_local_port_forwarding", false, { user })
+                .then((v) => newEnvVar("GITPOD_DISABLE_JETBRAINS_LOCAL_PORT_FORWARDING", String(v))),
+        ]);
+        sysEnvvars.push(isSetJavaXmx);
+        sysEnvvars.push(isSetJavaProcessorCount);
+        sysEnvvars.push(disableJetBrainsLocalPortForwarding);
+
+        const workspaceName = Workspace.fromWorkspaceName(workspace.description);
+        if (workspaceName && workspaceName.length > 0) {
+            const workspaceNameEnv = new EnvironmentVariable();
+            workspaceNameEnv.setName("GITPOD_WORKSPACE_NAME");
+            workspaceNameEnv.setValue(workspaceName);
+            sysEnvvars.push(workspaceNameEnv);
+        }
         const spec = new StartWorkspaceSpec();
         await createGitpodTokenPromise;
         spec.setEnvvarsList(envvars);
@@ -1544,11 +1604,10 @@ export class WorkspaceStarter {
         spec.setPortsList(ports);
         spec.setInitializer((await initializerPromise).initializer);
         const startWorkspaceSpecIDEImage = new IDEImage();
-        startWorkspaceSpecIDEImage.setWebRef(ideConfig.webImage);
-        startWorkspaceSpecIDEImage.setSupervisorRef(ideConfig.supervisorImage);
+        startWorkspaceSpecIDEImage.setWebRef(instance.configuration.ideImage);
+        startWorkspaceSpecIDEImage.setSupervisorRef(instance.configuration.supervisorImage || ""); // set for all new instances
         spec.setIdeImage(startWorkspaceSpecIDEImage);
-        spec.setIdeImageLayersList(ideConfig.ideImageLayers);
-        spec.setDeprecatedIdeImage(ideConfig.webImage);
+        spec.setIdeImageLayersList(instance.configuration.ideImageLayers!);
         spec.setWorkspaceImage(instance.workspaceImage);
         spec.setWorkspaceLocation(workspace.config.workspaceLocation || checkoutLocation);
         spec.setFeatureFlagsList(this.toWorkspaceFeatureFlags(featureFlags));
@@ -1563,13 +1622,33 @@ export class WorkspaceStarter {
             spec.setTimeout(defaultTimeout);
             spec.setMaximumLifetime(workspaceLifetime);
             if (allowSetTimeout) {
-                if (user.additionalData?.workspaceTimeout) {
+                if (organizationSettings.timeoutSettings?.inactivity) {
+                    try {
+                        const timeout = WorkspaceTimeoutDuration.validate(
+                            organizationSettings.timeoutSettings.inactivity,
+                        );
+                        spec.setTimeout(timeout);
+                    } catch (err) {}
+                }
+
+                // Users can optionally override the organization-wide timeout default if the organization allows it
+                if (!organizationSettings.timeoutSettings?.denyUserTimeouts && user.additionalData?.workspaceTimeout) {
                     try {
                         const timeout = WorkspaceTimeoutDuration.validate(user.additionalData?.workspaceTimeout);
                         spec.setTimeout(timeout);
                     } catch (err) {}
                 }
+
+                // if the user has set a timeout, then disabledClosedTimeout would be true
                 if (user.additionalData?.disabledClosedTimeout === true) {
+                    /*
+                     * If disabledClosedTimeout is true, it indicates that the user wishes to prevent the workspace
+                     * from being automatically "stopped" or terminated due to inactivity.
+                     * By setting the closed timeout to "0", we effectively disable this automatic termination feature,
+                     * ensuring that the workspace remains active until it explicitly hits the workspace timeout limits,
+                     * if any are set. This provides users with greater control over their workspace's lifecycle,
+                     * accommodating scenarios where extended activity periods are necessary.
+                     */
                     spec.setClosedTimeout("0");
                 }
             }
@@ -1604,7 +1683,6 @@ export class WorkspaceStarter {
             "function:guessGitTokenScopes",
             "function:updateGitStatus",
             "function:getWorkspaceEnvVars",
-            "function:getEnvVars", // TODO remove this after new gitpod-cli is deployed
             "function:setEnvVar",
             "function:deleteEnvVar",
             "function:getTeams",
@@ -1613,6 +1691,7 @@ export class WorkspaceStarter {
             // getIDToken is used by Gitpod's OIDC Identity Provider to check for authorisation.
             // Without this scope the workspace cannot produce ID tokens.
             "function:getIDToken",
+            "function:getDefaultWorkspaceImage",
 
             "resource:" +
                 ScopedResourceGuard.marshalResourceScope({
@@ -1653,6 +1732,8 @@ export class WorkspaceStarter {
                     operations: ["create", "get"],
                 }),
         ];
+        // By intention, we only limit the token passed down to the workspace to the env vars scoped to that workspace.
+        // This is meant to maintain the "workspace as a unit of isolation" principle on the API level.
         if (CommitContext.is(workspace.context)) {
             const subjectID = workspace.context.repository.owner + "/" + workspace.context.repository.name;
             scopes.push(
@@ -1664,6 +1745,24 @@ export class WorkspaceStarter {
                     }),
             );
         }
+        // The only exception is "updates", which we allow to be made to all env vars (that exist).
+        scopes.push(
+            "resource:" +
+                ScopedResourceGuard.marshalResourceScope({
+                    kind: "envVar",
+                    subjectID: "*/**",
+                    operations: ["update"],
+                }),
+        );
+        // For updating environment variables created with */* instead of */**, we fall back to updating those
+        scopes.push(
+            "resource:" +
+                ScopedResourceGuard.marshalResourceScope({
+                    kind: "envVar",
+                    subjectID: "*/*",
+                    operations: ["update"],
+                }),
+        );
         return scopes;
     }
 
@@ -1677,12 +1776,12 @@ export class WorkspaceStarter {
         const host = context.repository.host;
         const hostContext = this.hostContextProvider.get(host);
         if (!hostContext) {
-            throw new Error(`Cannot authorize with host: ${host}`);
+            throw new ScmStartError(host, `Cannot authorize with host`);
         }
         const authProviderId = hostContext.authProvider.authProviderId;
         const identity = User.getIdentity(user, authProviderId);
         if (!identity) {
-            throw new Error("User is unauthorized!");
+            throw new ScmStartError(host, "User not connected with host");
         }
 
         const gitSpec = new GitSpec();
@@ -1696,12 +1795,12 @@ export class WorkspaceStarter {
         workspace: Workspace,
         context: WorkspaceContext,
         user: User,
-        lastValidWorkspaceInstanceId: string,
+        fromBackup: boolean,
     ): Promise<{ initializer: WorkspaceInitializer; disposable: Disposable }> {
         let result = new WorkspaceInitializer();
         const disp = new DisposableCollection();
 
-        if (lastValidWorkspaceInstanceId != "") {
+        if (fromBackup) {
             const backup = new FromBackupInitializer();
             if (CommitContext.is(context)) {
                 backup.setCheckoutLocation(context.checkoutLocation || "");
@@ -1739,7 +1838,7 @@ export class WorkspaceStarter {
                 result.setGit(initializer);
             }
         } else {
-            throw new Error("cannot create initializer for unkown context type");
+            throw new Error("cannot create initializer for unknown context type");
         }
         if (AdditionalContentContext.is(context)) {
             const additionalInit = new FileDownloadInitializer();
@@ -1822,12 +1921,12 @@ export class WorkspaceStarter {
         const host = context.repository.host;
         const hostContext = this.hostContextProvider.get(host);
         if (!hostContext) {
-            throw new Error(`Cannot authorize with host: ${host}`);
+            throw new ScmStartError(host, `Cannot authorize with host`);
         }
         const authProviderId = hostContext.authProvider.authProviderId;
         const identity = user.identities.find((i) => i.authProviderId === authProviderId);
         if (!identity) {
-            throw new Error("User is unauthorized!");
+            throw new ScmStartError(host, "User not connected with host");
         }
 
         const cloneUrl = context.repository.cloneUrl;
@@ -1840,7 +1939,7 @@ export class WorkspaceStarter {
         } else if (RefType.getRefType(context) === "tag") {
             targetMode = CloneTargetMode.REMOTE_COMMIT;
             cloneTarget = context.revision;
-        } else if (context.ref) {
+        } else if (RefType.getRefType(context) === "branch" && context.ref) {
             targetMode = CloneTargetMode.REMOTE_BRANCH;
             cloneTarget = context.ref;
         } else if (context.revision) {
@@ -1850,20 +1949,16 @@ export class WorkspaceStarter {
             targetMode = CloneTargetMode.REMOTE_HEAD;
         }
 
-        const gitToken = await this.tokenProvider.getTokenForHost(user, host);
+        const gitToken = await this.tokenProvider.getTokenForHost(user, host, SCM_TOKEN_LIFETIME_MINS);
+        if (!gitToken) {
+            throw new Error(`No token for host: ${host}`);
+        }
         const username = gitToken.username || "oauth2";
 
         const gitConfig = new GitConfig();
         gitConfig.setAuthentication(GitAuthMethod.BASIC_AUTH);
         gitConfig.setAuthUser(username);
         gitConfig.setAuthPassword(gitToken.value);
-
-        if (this.config.insecureNoDomain) {
-            const token = await this.tokenProvider.getTokenForHost(user, host);
-            gitConfig.setAuthentication(GitAuthMethod.BASIC_AUTH);
-            gitConfig.setAuthUser(token.username || "oauth2");
-            gitConfig.setAuthPassword(token.value);
-        }
 
         const userGitConfig = workspace.config.gitConfig;
         if (!!userGitConfig) {
@@ -1873,6 +1968,25 @@ export class WorkspaceStarter {
         }
 
         const result = new GitInitializer();
+        // Full clone repository for prebuild workspaces
+        if (workspace.type === "prebuild" && workspace.projectId) {
+            const isEnabledPrebuildFullClone = await getExperimentsClientForBackend().getValueAsync(
+                "enabled_configuration_prebuild_full_clone",
+                false,
+                {},
+            );
+            if (isEnabledPrebuildFullClone) {
+                const project = await this.projectService
+                    .getProject(user.id, workspace.projectId, true)
+                    .catch((err) => {
+                        log.error("failed to get project", err);
+                        return undefined;
+                    });
+                if (project && project.settings?.prebuilds?.cloneSettings?.fullClone) {
+                    result.setFullClone(true);
+                }
+            }
+        }
         result.setConfig(gitConfig);
         result.setCheckoutLocation(context.checkoutLocation || context.repository.name);
         if (!!cloneTarget) {
@@ -1914,10 +2028,89 @@ export class WorkspaceStarter {
      */
     private async getImageBuilderClient(
         user: User,
-        workspace: Workspace,
+        workspace?: Workspace,
         instance?: WorkspaceInstance,
         region?: WorkspaceRegion,
     ) {
         return this.imagebuilderClientProvider.getClient(user, workspace, instance, region);
     }
+
+    public async resolveBaseImage(
+        ctx: TraceContext,
+        user: User,
+        imageRef: string,
+        workspace?: Workspace,
+        instance?: WorkspaceInstance,
+        region?: WorkspaceRegion,
+        organizationId?: string,
+    ) {
+        const req = new ResolveBaseImageRequest();
+        req.setRef(imageRef);
+        const allowAll = new BuildRegistryAuthTotal();
+        allowAll.setAllowAll(true);
+        const auth = new BuildRegistryAuth();
+        auth.setTotal(allowAll);
+        req.setAuth(auth);
+
+        // if the image resolution is for an organization, we also include the organization's set up env vars
+        if (organizationId) {
+            const envVars = await this.envVarService.listOrgEnvVarsWithValues(user.id, organizationId);
+
+            const additionalAuth = await this.getAdditionalImageAuth({ workspace: envVars });
+            additionalAuth.forEach((val, key) => auth.getAdditionalMap().set(key, val));
+        }
+
+        const client = await this.getImageBuilderClient(user, workspace, instance, region);
+        return client.resolveBaseImage({ span: ctx.span }, req);
+    }
+
+    private async existsWithWsManager(ctx: TraceContext, instance: WorkspaceInstance): Promise<boolean> {
+        try {
+            const req = new DescribeWorkspaceRequest();
+            req.setId(instance.id);
+
+            const client = await this.clientProvider.get(instance.region);
+            await client.describeWorkspace(ctx, req);
+            return true;
+        } catch (err) {
+            if (isClusterMaintenanceError(err)) {
+                throw err;
+            }
+            return false;
+        }
+    }
+}
+
+function resolveGitpodTasks(ws: Workspace, instance: WorkspaceInstance): TaskConfig[] {
+    const tasks: TaskConfig[] = [];
+    if (ws.config.tasks) {
+        tasks.push(...ws.config.tasks);
+    }
+    if (instance.configuration.ideSetup?.tasks) {
+        tasks.push(...instance.configuration.ideSetup.tasks);
+    }
+    return tasks;
+}
+
+export async function isWorkspaceClassDiscoveryEnabled(user: { id: string }): Promise<boolean> {
+    return getExperimentsClientForBackend().getValueAsync("workspace_class_discovery_enabled", false, {
+        user: user,
+    });
+}
+
+export class ScmStartError extends Error {
+    constructor(public readonly host: string, msg: string) {
+        super(`${host}: ` + msg);
+    }
+
+    static isScmStartError(o: any): o is ScmStartError {
+        return !!o && o["host"];
+    }
+}
+
+function newEnvVar(key: string, value: string): EnvironmentVariable {
+    const env = new EnvironmentVariable();
+    env.setName(key);
+    env.setValue(value);
+    return env;
 }

@@ -5,13 +5,13 @@
  */
 
 import { FC, useCallback, useReducer, useState } from "react";
-import { Button } from "../components/Button";
 import { Heading1, Subheading } from "../components/typography/headings";
 import { SetupLayout } from "./SetupLayout";
 import { SSOConfigForm, isValid, ssoConfigReducer, useSaveSSOConfig } from "../teams/sso/SSOConfigForm";
 import Alert from "../components/Alert";
 import { OIDCClientConfig } from "@gitpod/public-api/lib/gitpod/experimental/v1/oidc_pb";
 import { openOIDCStartWindow } from "../provider-utils";
+import { LoadingButton } from "@podkit/buttons/LoadingButton";
 
 type Props = {
     config?: OIDCClientConfig;
@@ -27,6 +27,8 @@ export const SSOSetupStep: FC<Props> = ({ config, onComplete, progressCurrent, p
         issuer: config?.oidcConfig?.issuer ?? "",
         clientId: config?.oauth2Config?.clientId ?? "",
         clientSecret: config?.oauth2Config?.clientSecret ?? "",
+        celExpression: config?.oauth2Config?.celExpression ?? "",
+        usePKCE: config?.oauth2Config?.usePkce ?? false,
     });
     const configIsValid = isValid(ssoConfig);
 
@@ -86,7 +88,7 @@ export const SSOSetupStep: FC<Props> = ({ config, onComplete, progressCurrent, p
                 <Subheading>
                     Enable single sign-on for your organization using the OpenID Connect (OIDC) standard.{" "}
                     <a
-                        href="https://gitpod.io/docs/dedicated/sso-setup-8f7696e0"
+                        href="https://www.gitpod.io/docs/enterprise/setup-gitpod/configure-sso"
                         target="_blank"
                         rel="noreferrer noopener"
                         className="gp-link"
@@ -103,9 +105,9 @@ export const SSOSetupStep: FC<Props> = ({ config, onComplete, progressCurrent, p
                 <SSOConfigForm config={ssoConfig} onChange={dispatch} />
 
                 <div className="mt-6">
-                    <Button htmlType="submit" size="block" disabled={!configIsValid} loading={isLoading}>
+                    <LoadingButton type="submit" className="w-full" disabled={!configIsValid} loading={isLoading}>
                         Verify SSO Configuration
-                    </Button>
+                    </LoadingButton>
                 </div>
             </form>
         </SetupLayout>

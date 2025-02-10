@@ -21,15 +21,14 @@ import com.intellij.ssh.OpenSshLikeHostKeyVerifier
 import com.intellij.ssh.connectionBuilder
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.AlignY
 import com.intellij.ui.dsl.builder.panel
-import com.intellij.ui.dsl.gridLayout.HorizontalAlign
-import com.intellij.ui.dsl.gridLayout.VerticalAlign
 import com.intellij.util.application
 import com.intellij.util.io.DigestUtil
-import com.intellij.util.io.await
 import com.intellij.util.io.delete
+import com.intellij.util.net.JdkProxyProvider
 import com.intellij.util.net.ssl.CertificateManager
-import com.intellij.util.proxy.CommonProxy
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
@@ -42,9 +41,12 @@ import com.jetbrains.rd.util.ConcurrentHashMap
 import com.jetbrains.rd.util.URI
 import com.jetbrains.rd.util.lifetime.Lifetime
 import com.jetbrains.rd.util.lifetime.LifetimeDefinition
+import com.jetbrains.rd.util.threading.coroutines.launch
 import io.gitpod.gitpodprotocol.api.entities.WorkspaceInstance
+import io.gitpod.jetbrains.gateway.common.GitpodConnectionHandleFactory
 import io.gitpod.jetbrains.icons.GitpodIcons
 import kotlinx.coroutines.*
+import kotlinx.coroutines.future.await
 import java.net.URL
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -55,7 +57,7 @@ import javax.swing.JLabel
 import kotlin.coroutines.coroutineContext
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.writeText
-
+import kotlin.random.Random.Default.nextInt
 
 @Suppress("UnstableApiUsage", "OPT_IN_USAGE")
 class GitpodConnectionProvider : GatewayConnectionProvider {
@@ -70,6 +72,17 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
 
     private val jacksonMapper = jacksonObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+
+
+    private fun showTimedOutDialogDialog(workspaceId: String, detail: String?) {
+        val title = "Workspace Timed Out"
+        val message = "Your workspace $workspaceId has timed out${if (detail.isNullOrBlank()) "" else " : $detail"}."
+        val okButton = Messages.getOkButton()
+        val options = arrayOf(okButton)
+        val defaultIndex = 0
+        val icon = Messages.getInformationIcon()
+        Messages.showDialog(message, title, options, defaultIndex, icon)
+    }
 
     override suspend fun connect(
         parameters: Map<String, String>,
@@ -139,17 +152,16 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
                     resizableRow()
                     panel {
                         row {
-                            icon(GitpodIcons.Logo2x)
-                                .horizontalAlign(HorizontalAlign.CENTER)
+                            icon(GitpodIcons.Logo2x).align(AlignX.CENTER)
                         }
                         row {
                             cell(phaseMessage)
                                 .bold()
-                                .horizontalAlign(HorizontalAlign.CENTER)
+                                .align(AlignX.CENTER)
                         }
                         row {
                             cell(statusMessage)
-                                .horizontalAlign(HorizontalAlign.CENTER)
+                                .align(AlignX.CENTER)
                                 .applyToComponent {
                                     foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
                                 }
@@ -167,13 +179,13 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
                                     browserLink(it, it)
                                 }
                             }
-                        }.horizontalAlign(HorizontalAlign.CENTER)
+                        }.align(AlignX.CENTER)
                         row {
                             cell(JBScrollPane(errorMessage).apply {
                                 border = null
-                            }).horizontalAlign(HorizontalAlign.CENTER)
+                            }).align(AlignX.CENTER)
                         }
-                    }.verticalAlign(VerticalAlign.CENTER)
+                    }.align(AlignY.CENTER)
                 }
             }
         }
@@ -189,6 +201,40 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
             var thinClientJob: Job? = null
 
             var lastUpdate: WorkspaceInstance? = null
+            var canceledByGitpod = false
+
+            val ownerToken = client.server.getOwnerToken(connectParams.actualWorkspaceId).await()
+
+            if (settings.additionalHeartbeat) {
+                thisLogger().info("gitpod: additional heartbeat enabled for ${connectParams.resolvedWorkspaceId}")
+                connectionLifetime.launch {
+                    while (isActive) {
+                        val delaySeconds = 30 + nextInt(5, 15)
+                        if (thinClientJob?.isActive == true) {
+                            try {
+                                val ideUrlStr = lastUpdate?.ideUrl
+                                val ideUrl = if (ideUrlStr.isNullOrBlank()) {
+                                    null
+                                } else {
+                                    URL(ideUrlStr.replace(connectParams.actualWorkspaceId, connectParams.resolvedWorkspaceId))
+                                }
+                                if (lastUpdate?.status?.phase == "running" && ideUrl != null) {
+                                    sendHeartBeatThroughSupervisor(ideUrl, ownerToken, connectParams)
+                                }
+                            } catch (t: Throwable) {
+                                thisLogger().error(
+                                    "gitpod: failed to send additional heartbeat for ${connectParams.resolvedWorkspaceId}",
+                                    t
+                                )
+                            }
+                        } else {
+                            thisLogger().debug("gitpod: thinClient is not active, skipping additional heartbeat for ${connectParams.resolvedWorkspaceId}")
+                        }
+                        delay(delaySeconds * 1000L)
+                    }
+                }
+            }
+
             try {
                 for (update in updates) {
                     try {
@@ -256,14 +302,14 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
                                 statusMessage.text = ""
                             }
                         }
-
                         if (update.status.phase == "stopping" || update.status.phase == "stopped") {
+                            canceledByGitpod = true
                             thinClientJob?.cancel()
                             thinClient?.close()
                         }
 
                         if (thinClientJob == null && update.status.phase == "running") {
-                            thinClientJob = launch {
+                            thinClientJob = launch thinClientJob@{
                                 try {
                                     val ideUrl = URL(resolvedIdeUrl)
                                     val ownerToken = client.server.getOwnerToken(update.workspaceId).await()
@@ -283,22 +329,54 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
                                     }
                                     if (credentials == null) {
                                         setErrorMessage("${connectParams.gitpodHost} installation does not allow SSH access")
-                                        return@launch
+                                        return@thinClientJob
                                     }
 
-                                    val joinLink = resolveJoinLink(ideUrl, ownerToken, connectParams)
-                                    if (joinLink.isNullOrEmpty()) {
+                                    var joinLinkResp = resolveJoinLink(ideUrl, ownerToken, connectParams)
+                                    if (joinLinkResp == null || joinLinkResp.joinLink.isNullOrEmpty()) {
                                         setErrorMessage("failed to fetch JetBrains Gateway Join Link.")
-                                        return@launch
+                                        return@thinClientJob
                                     }
                                     val clientHandle = connectionHandleFactory.connect(
                                         connectionLifetime,
                                         SshHostTunnelConnector(credentials),
-                                        URI(joinLink)
+                                        URI(joinLinkResp.joinLink)
                                     )
+                                    var triggeredClientClosed = false
                                     clientHandle.clientClosed.advise(connectionLifetime) {
-                                        application.invokeLater {
-                                            connectionLifetime.terminate()
+                                        // Been canceled by user
+                                        if (!canceledByGitpod) {
+                                            connectionLifetime.launch {
+                                                // Delay for 5 seconds to see if thinClient could be terminated in time
+                                                // Then we don't see error dialog from Gateway
+                                                delay(5000)
+                                                application.invokeLater {
+                                                    connectionLifetime.terminate()
+                                                }
+                                            }
+                                            return@advise
+                                        }
+                                        if (triggeredClientClosed) {
+                                            return@advise
+                                        }
+                                        triggeredClientClosed = true
+                                        // Wait until workspace is stopped
+                                        suspend fun waitUntilStopped(): Boolean {
+                                            while (lastUpdate.status.phase != "stopped") {
+                                                delay(1000)
+                                            }
+                                            return true
+                                        }
+                                        // Check if it's timed out, if so, show timed out dialog
+                                        connectionLifetime.launch {
+                                            val isInStoppedPhase = waitUntilStopped()
+                                            val isTimedOut = isInStoppedPhase && phaseMessage.text == "Timed Out"
+                                            application.invokeLater {
+                                                if (isTimedOut) {
+                                                    showTimedOutDialogDialog(connectParams.resolvedWorkspaceId, lastUpdate.status.conditions.timeout)
+                                                }
+                                                connectionLifetime.terminate()
+                                            }
                                         }
                                     }
                                     clientHandle.onClientPresenceChanged.advise(connectionLifetime) {
@@ -307,6 +385,33 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
                                                 statusMessage.text = ""
                                             }
                                         }
+                                    }
+                                    var backendStatusJob: Job? = null
+                                    if (joinLinkResp.appPid > 0) {
+                                        backendStatusJob = launch backendStatusJob@{
+                                            while (isActive) {
+                                                try {
+                                                    delay(5000)
+                                                    val updatedJoinLinkResp = resolveJoinLink(ideUrl, ownerToken, connectParams)
+                                                    if (updatedJoinLinkResp != null && joinLinkResp != null && joinLinkResp!!.appPid > 0 && updatedJoinLinkResp.appPid > 0 && updatedJoinLinkResp.appPid != joinLinkResp!!.appPid) {
+                                                        clientHandle.notifyReconnect()
+                                                        clientHandle.updateJoinLink(URI(updatedJoinLinkResp.joinLink), true)
+                                                        joinLinkResp = updatedJoinLinkResp
+                                                    }
+                                                } catch (t: Throwable) {
+                                                    if (t is CancellationException) {
+                                                        return@backendStatusJob
+                                                    }
+                                                    thisLogger().error(
+                                                        "${connectParams.gitpodHost}: ${connectParams.resolvedWorkspaceId}: failed to reconnect:",
+                                                        t
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    connectionLifetime.onTerminationOrNow {
+                                        backendStatusJob?.cancel()
                                     }
                                     thinClient = clientHandle
                                 } catch (t: Throwable) {
@@ -359,7 +464,7 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
                 privateKeyFile.delete()
             }
 
-            val proxies = CommonProxy.getInstance().select(ideUrl)
+            val proxies = JdkProxyProvider.getInstance().proxySelector.select(ideUrl.toURI())
             val sslContext = CertificateManager.getInstance().sslContext
             val sshWebSocketServer = GitpodWebSocketTunnelServer(
                 "wss://${ideUrl.host}/_supervisor/tunnel/ssh",
@@ -373,11 +478,18 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
             if (keyPair.hostKey != null) {
                 hostKeys = listOf(SSHHostKey(keyPair.hostKey.type, keyPair.hostKey.value))
             }
+            val gatewayHostKeys = resolveHostKeys(ideUrl, connectParams)
+            hostKeys = hostKeys + gatewayHostKeys.orEmpty()
+
+            var userName = keyPair.userName
+            if (userName.isNullOrBlank()) {
+                userName = "gitpod"
+            }
 
             return resolveCredentials(
                 "localhost",
                 sshWebSocketServer.port,
-                "gitpod",
+                userName,
                 null,
                 privateKeyFile.absolutePathString(),
                 hostKeys
@@ -407,12 +519,12 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
 
         try {
             val sshHostUrl =
-                URL(
-                    ideUrl.toString().replace(
-                        connectParams.resolvedWorkspaceId,
-                        "${connectParams.resolvedWorkspaceId}.ssh"
+                    URL(
+                            ideUrl.toString().replace(
+                                    connectParams.resolvedWorkspaceId,
+                                    "${connectParams.resolvedWorkspaceId}.ssh"
+                            )
                     )
-                )
             return resolveCredentials(
                 sshHostUrl.host,
                 22,
@@ -434,12 +546,50 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
         ideUrl: URL,
         ownerToken: String,
         connectParams: ConnectParams
-    ): String? {
-        var resolveJoinLinkUrl = "https://24000-${ideUrl.host}/joinLink"
+    ): JoinLinkResp? {
+        var resolveJoinLinkUrl = "https://24000-${ideUrl.host}/joinLink2"
         if (!connectParams.backendPort.isNullOrBlank()) {
             resolveJoinLinkUrl += "?backendPort=${connectParams.backendPort}"
         }
-        return fetchWS(resolveJoinLinkUrl, connectParams, ownerToken)
+        var rawResp = retryFetchWS(resolveJoinLinkUrl, connectParams, ownerToken)
+        if (rawResp != null) {
+            return with(jacksonMapper) {
+                propertyNamingStrategy = PropertyNamingStrategies.LowerCamelCaseStrategy()
+                readValue(rawResp, object : TypeReference<JoinLinkResp>() {})
+            }
+        }
+
+        // Fallback to old endpoint
+        resolveJoinLinkUrl = "https://24000-${ideUrl.host}/joinLink"
+        if (!connectParams.backendPort.isNullOrBlank()) {
+            resolveJoinLinkUrl += "?backendPort=${connectParams.backendPort}"
+        }
+        rawResp = retryFetchWS(resolveJoinLinkUrl, connectParams, ownerToken)
+        if (rawResp != null) {
+            return JoinLinkResp(-1, rawResp)
+        }
+        return null
+    }
+
+    private var sendHeartBeatThroughSupervisorLogOnce = false
+    private suspend fun sendHeartBeatThroughSupervisor(
+        ideUrl: URL,
+        ownerToken: String,
+        connectParams: ConnectParams
+    ) {
+        val resp = fetchWS("https://${ideUrl.host}/_supervisor/v1/send_heartbeat", ownerToken, 2000L)
+        if (resp.statusCode != 200) {
+            if (!resp.body.isNullOrBlank() && resp.body.contains("not implemented")) {
+                if (!sendHeartBeatThroughSupervisorLogOnce) {
+                    thisLogger().warn("gitpod: sendHeartbeat ${connectParams.actualWorkspaceId} failed: method is not implemented in supervisor")
+                    sendHeartBeatThroughSupervisorLogOnce = true
+                }
+                return
+            }
+            thisLogger().error("gitpod: sendHeartbeat ${connectParams.actualWorkspaceId} failed: ${resp.statusCode}, body: ${resp.body}")
+            return
+        }
+        thisLogger().debug("gitpod: sendHeartbeat succeed for ${connectParams.actualWorkspaceId}")
     }
 
     private fun resolveCredentials(
@@ -493,7 +643,7 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
         ownerToken: String
     ): CreateSSHKeyPairResponse? {
         val value =
-            fetchWS("https://${ideUrl.host}/_supervisor/v1/ssh_keys/create", connectParams, ownerToken)
+            retryFetchWS("https://${ideUrl.host}/_supervisor/v1/ssh_keys/create", connectParams, ownerToken)
         if (value.isNullOrBlank()) {
             return null
         }
@@ -508,7 +658,7 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
         connectParams: ConnectParams
     ): List<SSHHostKey>? {
         val hostKeysValue =
-            fetchWS("https://${ideUrl.host}/_ssh/host_keys", connectParams, null)
+            retryFetchWS("https://${ideUrl.host}/_ssh/host_keys", connectParams, null)
         if (hostKeysValue.isNullOrBlank()) {
             return null
         }
@@ -575,10 +725,42 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
         return acceptHostKey
     }
 
+    data class HttpResponseData(val statusCode: Int, val body: String?) {
+        fun statusCode() = statusCode
+        fun body() = body
+    }
+
     private suspend fun fetchWS(
         endpointUrl: String,
-        connectParams: ConnectParams,
         ownerToken: String?,
+        timeoutMillis: Long,
+    ): HttpResponseData {
+        var httpRequestBuilder = HttpRequest.newBuilder()
+            .uri(URI.create(endpointUrl))
+            .GET()
+            .timeout(Duration.ofMillis(timeoutMillis))
+        if (!ownerToken.isNullOrBlank()) {
+            httpRequestBuilder = httpRequestBuilder.header("x-gitpod-owner-token", ownerToken)
+        }
+        val httpRequest = httpRequestBuilder.build()
+        val responseFuture =
+            httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString())
+
+        try {
+            val response = responseFuture.await()
+            return HttpResponseData(response.statusCode(), response.body())
+        } catch (e: Exception) {
+            if (responseFuture.isCancelled) {
+                throw CancellationException()
+            }
+            throw e
+        }
+    }
+
+    private suspend fun retryFetchWS(
+        endpointUrl: String,
+        connectParams: ConnectParams,
+        ownerToken: String?
     ): String? {
         val maxRequestTimeout = 30 * 1000L
         val timeoutDelayGrowFactor = 1.5
@@ -586,16 +768,7 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
         while (true) {
             coroutineContext.job.ensureActive()
             try {
-                var httpRequestBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(endpointUrl))
-                    .GET()
-                    .timeout(Duration.ofMillis(requestTimeout))
-                if (!ownerToken.isNullOrBlank()) {
-                    httpRequestBuilder = httpRequestBuilder.header("x-gitpod-owner-token", ownerToken)
-                }
-                val httpRequest = httpRequestBuilder.build()
-                val response =
-                    httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString()).await()
+                val response = fetchWS(endpointUrl, ownerToken, requestTimeout)
                 if (response.statusCode() == 200) {
                     return response.body()
                 }
@@ -637,5 +810,7 @@ class GitpodConnectionProvider : GatewayConnectionProvider {
 
     private data class SSHPublicKey(val type: String, val value: String)
 
-    private data class CreateSSHKeyPairResponse(val privateKey: String, val hostKey: SSHPublicKey?)
+    private data class CreateSSHKeyPairResponse(val privateKey: String, val hostKey: SSHPublicKey?, val userName: String?)
+
+    private data class JoinLinkResp(val appPid: Int, val joinLink: String)
 }

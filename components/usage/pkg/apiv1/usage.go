@@ -18,6 +18,7 @@ import (
 	v1 "github.com/gitpod-io/gitpod/usage-api/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
@@ -29,6 +30,7 @@ type UsageService struct {
 	nowFunc           func() time.Time
 	pricer            *WorkspacePricer
 	costCenterManager *db.CostCenterManager
+	ledgerInterval    time.Duration
 
 	v1.UnimplementedUsageServiceServer
 }
@@ -167,9 +169,10 @@ func (s *UsageService) ListUsage(ctx context.Context, in *v1.ListUsageRequest) (
 	}
 
 	return &v1.ListUsageResponse{
-		UsageEntries: usageData,
-		CreditsUsed:  usageSummary.CreditCentsUsed.ToCredits(),
-		Pagination:   &pagination,
+		UsageEntries:   usageData,
+		CreditsUsed:    usageSummary.CreditCentsUsed.ToCredits(),
+		Pagination:     &pagination,
+		LedgerInterval: durationpb.New(s.ledgerInterval),
 	}, nil
 }
 
@@ -355,13 +358,13 @@ func reconcileUsage(instances []db.WorkspaceInstanceForUsage, drafts []db.Usage,
 
 	instancesByID := dedupeWorkspaceInstancesForUsage(instances)
 
-	draftsByWorkspaceID := map[uuid.UUID]db.Usage{}
+	draftsByInstanceID := map[uuid.UUID]db.Usage{}
 	for _, draft := range drafts {
-		draftsByWorkspaceID[*draft.WorkspaceInstanceID] = draft
+		draftsByInstanceID[*draft.WorkspaceInstanceID] = draft
 	}
 
 	for instanceID, instance := range instancesByID {
-		if usage, exists := draftsByWorkspaceID[instanceID]; exists {
+		if usage, exists := draftsByInstanceID[instanceID]; exists {
 			updatedUsage, err := updateUsageFromInstance(instance, usage, pricer, now)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to construct updated usage record: %w", err)
@@ -389,7 +392,7 @@ func newUsageFromInstance(instance db.WorkspaceInstanceForUsage, pricer *Workspa
 	}
 
 	draft := true
-	if stopTime.IsSet() {
+	if instance.StoppedTime.IsSet() {
 		draft = false
 	}
 
@@ -409,21 +412,31 @@ func newUsageFromInstance(instance db.WorkspaceInstanceForUsage, pricer *Workspa
 		Draft:               draft,
 	}
 
+	creationTime := ""
+	if instance.CreationTime.IsSet() {
+		creationTime = db.TimeToISO8601(instance.CreationTime.Time())
+	}
 	startedTime := ""
 	if instance.StartedTime.IsSet() {
 		startedTime = db.TimeToISO8601(instance.StartedTime.Time())
 	}
 	endTime := ""
-	if instance.StoppingTime.IsSet() {
-		endTime = db.TimeToISO8601(instance.StoppingTime.Time())
+	if stopTime.IsSet() {
+		endTime = db.TimeToISO8601(stopTime.Time())
+	}
+	stoppedTime := ""
+	if instance.StoppedTime.IsSet() {
+		stoppedTime = db.TimeToISO8601(instance.StoppedTime.Time())
 	}
 	err := usage.SetMetadataWithWorkspaceInstance(db.WorkspaceInstanceUsageData{
 		WorkspaceId:    instance.WorkspaceID,
 		WorkspaceType:  instance.Type,
 		WorkspaceClass: instance.WorkspaceClass,
 		ContextURL:     instance.ContextURL,
+		CreationTime:   creationTime,
 		StartTime:      startedTime,
 		EndTime:        endTime,
+		StoppedTime:    stoppedTime,
 		UserID:         instance.UserID,
 		UserName:       instance.UserName,
 		UserAvatarURL:  instance.UserAvatarURL,
@@ -463,15 +476,22 @@ func dedupeWorkspaceInstancesForUsage(instances []db.WorkspaceInstanceForUsage) 
 	return set
 }
 
-func NewUsageService(conn *gorm.DB, pricer *WorkspacePricer, costCenterManager *db.CostCenterManager) *UsageService {
+func NewUsageService(conn *gorm.DB, pricer *WorkspacePricer, costCenterManager *db.CostCenterManager, ledgerIntervalStr string) (*UsageService, error) {
+
+	ledgerInterval, err := time.ParseDuration(ledgerIntervalStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse schedule duration: %w", err)
+	}
+
 	return &UsageService{
 		conn:              conn,
 		costCenterManager: costCenterManager,
 		nowFunc: func() time.Time {
 			return time.Now().UTC()
 		},
-		pricer: pricer,
-	}
+		pricer:         pricer,
+		ledgerInterval: ledgerInterval,
+	}, nil
 }
 
 func (s *UsageService) AddUsageCreditNote(ctx context.Context, req *v1.AddUsageCreditNoteRequest) (*v1.AddUsageCreditNoteResponse, error) {

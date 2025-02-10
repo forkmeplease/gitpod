@@ -17,10 +17,12 @@ import { getGitpodService } from "../service/service";
 import Alert from "./Alert";
 import { Subheading } from "./typography/headings";
 import { AddPaymentMethodModal } from "./billing/AddPaymentMethodModal";
-import { Button } from "./Button";
 import { useCreateHoldPaymentIntentMutation } from "../data/billing/create-hold-payment-intent-mutation";
 import { useToast } from "./toasts/Toasts";
 import { ProgressBar } from "./ProgressBar";
+import { useListOrganizationMembers } from "../data/organizations/members-query";
+import { Button } from "@podkit/buttons/Button";
+import { LoadingButton } from "@podkit/buttons/LoadingButton";
 
 const BASE_USAGE_LIMIT_FOR_STRIPE_USERS = 1000;
 
@@ -33,8 +35,9 @@ let didAlreadyCallSubscribe = false;
 
 export default function UsageBasedBillingConfig({ hideSubheading = false }: Props) {
     const currentOrg = useCurrentOrg().data;
-    const attrId = currentOrg ? AttributionId.create(currentOrg) : undefined;
+    const attrId = currentOrg ? AttributionId.createFromOrganizationId(currentOrg.id) : undefined;
     const attributionId = attrId && AttributionId.render(attrId);
+    const members = useListOrganizationMembers().data;
     const [showUpdateLimitModal, setShowUpdateLimitModal] = useState<boolean>(false);
     const [stripeSubscriptionId, setStripeSubscriptionId] = useState<string | undefined>();
     const [isLoadingStripeSubscription, setIsLoadingStripeSubscription] = useState<boolean>(true);
@@ -155,7 +158,7 @@ export default function UsageBasedBillingConfig({ hideSubheading = false }: Prop
                 // FIXME: Should we ask the customer to confirm or edit this default limit?
                 let limit = BASE_USAGE_LIMIT_FOR_STRIPE_USERS;
                 if (attrId?.kind === "team" && currentOrg) {
-                    limit = BASE_USAGE_LIMIT_FOR_STRIPE_USERS * currentOrg.members.length;
+                    limit = BASE_USAGE_LIMIT_FOR_STRIPE_USERS * (members?.length || 0);
                 }
                 const newLimit = await getGitpodService().server.subscribeToStripe(
                     attributionId,
@@ -190,7 +193,7 @@ export default function UsageBasedBillingConfig({ hideSubheading = false }: Prop
                 );
             }
         },
-        [attrId?.kind, attributionId, currentOrg, location.pathname, refreshSubscriptionDetails],
+        [members, attrId?.kind, attributionId, currentOrg, location.pathname, refreshSubscriptionDetails],
     );
 
     const showSpinner = !attributionId || isLoadingStripeSubscription || isCreatingSubscription;
@@ -237,21 +240,21 @@ export default function UsageBasedBillingConfig({ hideSubheading = false }: Prop
                     </Alert>
                 )}
                 {showSpinner && (
-                    <div className="flex flex-col mt-4 h-52 p-4 rounded-xl bg-gray-50 dark:bg-gray-800">
-                        <div className="uppercase text-sm text-gray-400 dark:text-gray-500">Balance</div>
+                    <div className="flex flex-col mt-4 h-52 p-4 rounded-xl bg-pk-surface-secondary">
+                        <div className="uppercase text-sm text-pk-content-tertiary">Balance</div>
                         <Spinner className="m-2 animate-spin" />
                     </div>
                 )}
                 {showBalance && (
-                    <div className="flex flex-col mt-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-800">
-                        <div className="uppercase text-sm text-gray-400 dark:text-gray-500">Balance</div>
+                    <div className="flex flex-col mt-4 p-4 rounded-xl bg-pk-surface-secondary">
+                        <div className="uppercase text-sm text-pk-content-tertiary">Balance</div>
                         <div className="mt-1 text-xl font-semibold flex-grow">
                             <span className="text-gray-900 dark:text-gray-100">
                                 {balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                             </span>
-                            <span className="text-gray-400 dark:text-gray-500"> Credits</span>
+                            <span className="text-pk-content-tertiary"> Credits</span>
                         </div>
-                        <div className="mt-4 text-sm flex text-gray-400 dark:text-gray-500">
+                        <div className="mt-4 text-sm flex text-pk-content-tertiary">
                             <span className="flex-grow">
                                 {typeof currentUsage === "number" &&
                                     typeof usageLimit === "number" &&
@@ -270,10 +273,10 @@ export default function UsageBasedBillingConfig({ hideSubheading = false }: Prop
                         <div className="mt-2 flex">
                             <ProgressBar value={percentage} />
                         </div>
-                        <div className="bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 -m-4 p-4 mt-4 rounded-b-xl flex">
+                        <div className="bg-pk-surface-secondary border-t border-gray-200 dark:border-gray-700 -m-4 p-4 mt-4 rounded-b-xl flex">
                             <div className="flex-grow">
-                                <div className="uppercase text-sm text-gray-400 dark:text-gray-500">Current Period</div>
-                                <div className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                                <div className="uppercase text-sm text-pk-content-tertiary">Current Period</div>
+                                <div className="text-sm font-medium text-pk-content-primary">
                                     <span title={billingCycleFrom.toDate().toUTCString().replace("GMT", "UTC")}>
                                         {billingCycleFrom.format("MMM D, YYYY")}
                                     </span>{" "}
@@ -291,7 +294,7 @@ export default function UsageBasedBillingConfig({ hideSubheading = false }: Prop
                                         "YYYY-MM-DD",
                                     )}`}
                                 >
-                                    <button className="secondary">View Usage →</button>
+                                    <Button variant="secondary">View Usage →</Button>
                                 </Link>
                             </div>
                         </div>
@@ -299,76 +302,64 @@ export default function UsageBasedBillingConfig({ hideSubheading = false }: Prop
                 )}
                 {showUpgradeTeam && (
                     <>
-                        <div className="flex flex-col mt-4 p-4 rounded-t-xl bg-gray-50 dark:bg-gray-800">
-                            <div className="uppercase text-sm text-gray-400 dark:text-gray-500">Current Plan</div>
-                            <div className="mt-1 text-xl font-semibold flex-grow text-gray-600 dark:text-gray-400">
+                        <div className="flex flex-col mt-4 p-4 rounded-t-xl bg-pk-surface-secondary">
+                            <div className="uppercase text-sm text-pk-content-tertiary">Current Plan</div>
+                            <div className="mt-1 text-xl font-semibold flex-grow text-pk-content-secondary">
                                 {freePlanName}
                             </div>
-                            <div className="mt-4 flex space-x-1 text-gray-400 dark:text-gray-500">
+                            <div className="mt-4 flex space-x-1 text-pk-content-tertiary">
                                 <div className="m-0.5 w-5 h-5 text-orange-500">
                                     <Check />
                                 </div>
                                 <div className="flex flex-col w-96">
-                                    <span className="font-bold text-gray-500 dark:text-gray-400">
-                                        {usageLimit} credits
-                                    </span>
+                                    <span className="font-bold text-pk-content-secondary">{usageLimit} credits</span>
                                     <span>{usageLimit / 10} hours of Standard workspace usage.</span>
                                 </div>
                             </div>
                         </div>
-                        <div className="flex flex-col p-4 rounded-b-xl bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
-                            <div className="uppercase text-sm text-gray-400 dark:text-gray-500">Upgrade Plan</div>
-                            <div className="mt-1 text-xl font-semibold flex-grow text-gray-800 dark:text-gray-100">
+                        <div className="flex flex-col p-4 rounded-b-xl bg-pk-surface-secondary border-t border-gray-200 dark:border-gray-700">
+                            <div className="uppercase text-sm text-pk-content-tertiary">Upgrade Plan</div>
+                            <div className="mt-1 text-xl font-semibold flex-grow text-pk-content-primary">
                                 Pay-as-you-go
                             </div>
-                            <div className="mt-4 flex space-x-1 text-gray-400 dark:text-gray-500">
+                            <div className="mt-4 flex space-x-1 text-pk-content-tertiary">
                                 <div className="flex flex-col">
-                                    <span>
-                                        {priceInformation}{" "}
-                                        <a className="gp-link" href="https://www.gitpod.io/pricing#cost-estimator">
-                                            Estimate costs
-                                        </a>
-                                    </span>
+                                    <span>{priceInformation}</span>
                                 </div>
                             </div>
                             <div className="flex justify-end mt-6 space-x-2">
                                 {stripePortalUrl && (
                                     <a href={stripePortalUrl}>
-                                        <button className="secondary" disabled={!stripePortalUrl}>
+                                        <Button variant="secondary" disabled={!stripePortalUrl}>
                                             View Past Invoices ↗
-                                        </button>
+                                        </Button>
                                     </a>
                                 )}
-                                <Button loading={createPaymentIntent.isLoading} onClick={handleAddPaymentMethod}>
+                                <LoadingButton loading={createPaymentIntent.isLoading} onClick={handleAddPaymentMethod}>
                                     Upgrade Plan
-                                </Button>
+                                </LoadingButton>
                             </div>
                         </div>
                     </>
                 )}
                 {showManageBilling && (
                     <div className="max-w-xl flex space-x-4">
-                        <div className="flex-grow flex flex-col mt-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-800">
-                            <div className="uppercase text-sm text-gray-400 dark:text-gray-500">Current Plan</div>
-                            <div className="mt-1 text-xl font-semibold flex-grow text-gray-800 dark:text-gray-100">
+                        <div className="flex-grow flex flex-col mt-4 p-4 rounded-xl bg-pk-surface-secondary">
+                            <div className="uppercase text-sm text-pk-content-tertiary">Current Plan</div>
+                            <div className="mt-1 text-xl font-semibold flex-grow text-pk-content-primary">
                                 Pay-as-you-go
                             </div>
-                            <div className="mt-4 flex space-x-1 text-gray-400 dark:text-gray-500">
+                            <div className="mt-4 flex space-x-1 text-pk-content-tertiary">
                                 <Check className="m-0.5 w-8 h-5 text-orange-500" />
                                 <div className="flex flex-col">
-                                    <span>
-                                        {priceInformation}{" "}
-                                        <a className="gp-link" href="https://www.gitpod.io/pricing#cost-estimator">
-                                            Estimate costs
-                                        </a>
-                                    </span>
+                                    <span>{priceInformation}</span>
                                 </div>
                             </div>
 
                             <a className="mt-5 self-end" href={stripePortalUrl}>
-                                <button className="secondary" disabled={!stripePortalUrl}>
+                                <Button variant="secondary" disabled={!stripePortalUrl}>
                                     Manage Billing Settings ↗
-                                </button>
+                                </Button>
                             </a>
                         </div>
                     </div>
@@ -453,12 +444,12 @@ function UpdateLimitModal(props: {
                 </label>
             </ModalBody>
             <ModalFooter>
-                <Button type="secondary" onClick={props.onClose}>
+                <Button variant="secondary" onClick={props.onClose}>
                     Cancel
                 </Button>
-                <Button htmlType="submit" loading={isSaving}>
+                <LoadingButton type="submit" loading={isSaving}>
                     Update
-                </Button>
+                </LoadingButton>
             </ModalFooter>
         </Modal>
     );

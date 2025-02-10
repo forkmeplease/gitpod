@@ -10,7 +10,6 @@ import (
 	"os"
 	"time"
 
-	workspacev1 "github.com/gitpod-io/gitpod/ws-manager/api/crd/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"golang.org/x/xerrors"
@@ -24,6 +23,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/gitpod-io/gitpod/common-go/log"
 	"github.com/gitpod-io/gitpod/ws-daemon/pkg/cgroup"
@@ -36,11 +37,11 @@ import (
 	"github.com/gitpod-io/gitpod/ws-daemon/pkg/iws"
 	"github.com/gitpod-io/gitpod/ws-daemon/pkg/netlimit"
 	"github.com/gitpod-io/gitpod/ws-daemon/pkg/quota"
+	workspacev1 "github.com/gitpod-io/gitpod/ws-manager/api/crd/v1"
 )
 
 var (
 	scheme = runtime.NewScheme()
-	// setupLog = ctrl.Log.WithName("setup")
 )
 
 func init() {
@@ -117,6 +118,8 @@ func NewDaemon(config Config) (*Daemon, error) {
 
 				cgroup.ProcessCodeServer:       -10,
 				cgroup.ProcessCodeServerHelper: -5,
+
+				cgroup.ProcessJetBrainsIDE: -10,
 			},
 			EnableOOMScoreAdj: config.OOMScores.Enabled,
 			OOMScoreAdj: map[cgroup.ProcessType]int{
@@ -124,6 +127,7 @@ func NewDaemon(config Config) (*Daemon, error) {
 				cgroup.ProcessSupervisor:       config.OOMScores.Tier1,
 				cgroup.ProcessCodeServer:       config.OOMScores.Tier1,
 				cgroup.ProcessIDE:              config.OOMScores.Tier1,
+				cgroup.ProcessJetBrainsIDE:     config.OOMScores.Tier1,
 				cgroup.ProcessCodeServerHelper: config.OOMScores.Tier2,
 				cgroup.ProcessWebIDEHelper:     config.OOMScores.Tier2,
 			},
@@ -169,11 +173,21 @@ func NewDaemon(config Config) (*Daemon, error) {
 
 	mgr, err = ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:                 scheme,
-		Port:                   9443,
-		Namespace:              config.Runtime.KubernetesNamespace,
 		HealthProbeBindAddress: "0",
-		MetricsBindAddress:     "0", // Metrics are exposed through baseserver.
-		NewCache:               cache.MultiNamespacedCacheBuilder([]string{config.Runtime.KubernetesNamespace, config.Runtime.SecretsNamespace}),
+		Metrics: metricsserver.Options{
+			// Disable the metrics server.
+			// We only need access to the reconciliation loop feature.
+			BindAddress: "0",
+		},
+		Cache: cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				config.Runtime.KubernetesNamespace: {},
+				config.Runtime.SecretsNamespace:    {},
+			},
+		},
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port: 9443,
+		}),
 	})
 	if err != nil {
 		return nil, err
@@ -194,13 +208,18 @@ func NewDaemon(config Config) (*Daemon, error) {
 		config.CPULimit.CGroupBasePath,
 	)
 
-	workspaceOps, err := controller.NewWorkspaceOperations(contentCfg, controller.NewWorkspaceProvider(contentCfg.WorkingArea, hooks), wrappedReg)
+	dsptch, err := dispatch.NewDispatch(containerRuntime, clientset, config.Runtime.KubernetesNamespace, nodename, listener...)
+	if err != nil {
+		return nil, err
+	}
+
+	workspaceOps, err := controller.NewWorkspaceOperations(contentCfg, controller.NewWorkspaceProvider(contentCfg.WorkingArea, hooks), wrappedReg, dsptch)
 	if err != nil {
 		return nil, err
 	}
 
 	wsctrl, err := controller.NewWorkspaceController(
-		mgr.GetClient(), mgr.GetEventRecorderFor("workspace"), nodename, config.Runtime.SecretsNamespace, config.WorkspaceController.MaxConcurrentReconciles, workspaceOps, wrappedReg)
+		mgr.GetClient(), mgr.GetEventRecorderFor("workspace"), nodename, config.Runtime.SecretsNamespace, config.WorkspaceController.MaxConcurrentReconciles, workspaceOps, wrappedReg, containerRuntime)
 	if err != nil {
 		return nil, err
 	}
@@ -218,11 +237,6 @@ func NewDaemon(config Config) (*Daemon, error) {
 
 	housekeeping := controller.NewHousekeeping(contentCfg.WorkingArea, 5*time.Minute)
 	go housekeeping.Start(context.Background())
-
-	dsptch, err := dispatch.NewDispatch(containerRuntime, clientset, config.Runtime.KubernetesNamespace, nodename, listener...)
-	if err != nil {
-		return nil, err
-	}
 
 	dsk := diskguard.FromConfig(config.DiskSpaceGuard, clientset, nodename)
 

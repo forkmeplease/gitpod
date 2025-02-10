@@ -14,6 +14,7 @@ import {
     TokenEntry,
     User,
     UserEnvVar,
+    UserEnvVarValue,
     UserSSHPublicKey,
 } from "@gitpod/gitpod-protocol";
 import { OAuthTokenRepository, OAuthUserRepository } from "@jmondi/oauth2-server";
@@ -96,7 +97,7 @@ export interface UserDB extends OAuthUserRepository, OAuthTokenRepository, Trans
      * @param identity
      * @throws an error when there is more than one token
      */
-    findTokenForIdentity(identity: Identity): Promise<Token | undefined>;
+    findTokenEntryForIdentity(identity: Identity): Promise<TokenEntry | undefined>;
 
     /**
      *
@@ -112,7 +113,9 @@ export interface UserDB extends OAuthUserRepository, OAuthTokenRepository, Trans
      */
     findUsersByEmail(email: string): Promise<User[]>;
 
-    setEnvVar(envVar: UserEnvVar): Promise<void>;
+    findEnvVar(userId: string, envVar: UserEnvVarValue): Promise<UserEnvVar | undefined>;
+    addEnvVar(userId: string, envVar: UserEnvVarValue): Promise<UserEnvVar>;
+    updateEnvVar(userId: string, envVar: Partial<UserEnvVarValue>): Promise<UserEnvVar | undefined>;
     deleteEnvVar(envVar: UserEnvVar): Promise<void>;
     getEnvVars(userId: string): Promise<UserEnvVar[]>;
 
@@ -147,6 +150,8 @@ export interface UserDB extends OAuthUserRepository, OAuthTokenRepository, Trans
     isBlockedPhoneNumber(phoneNumber: string): Promise<boolean>;
 
     findOrgOwnedUser(organizationId: string, email: string): Promise<MaybeUser>;
+
+    findUserIdsNotYetMigratedToFgaVersion(fgaRelationshipsVersion: number, limit: number): Promise<string[]>;
 }
 export type PartialUserUpdate = Partial<Omit<User, "identities">> & Pick<User, "id">;
 

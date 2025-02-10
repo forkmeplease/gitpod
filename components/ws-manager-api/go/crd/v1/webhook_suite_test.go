@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitpod-io/gitpod/common-go/util"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -24,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
@@ -46,11 +49,16 @@ var _ = BeforeSuite(func() {
 
 	ctx, cancel = context.WithCancel(context.TODO())
 
+	crdPath := filepath.Join("..", "..", "config", "crd", "bases")
+	if !util.InLeewayBuild() {
+		crdPath = filepath.Join("..", "..", "..", "..", "ws-manager-mk2", "config", "crd", "bases")
+	}
+
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		ControlPlaneStartTimeout: 1 * time.Minute,
 		ControlPlaneStopTimeout:  1 * time.Minute,
-		CRDDirectoryPaths:        []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths:        []string{crdPath},
 		ErrorIfCRDPathMissing:    false,
 		WebhookInstallOptions: envtest.WebhookInstallOptions{
 			Paths: []string{filepath.Join("..", "..", "config", "webhook")},
@@ -77,12 +85,15 @@ var _ = BeforeSuite(func() {
 	// start webhook server using Manager
 	webhookInstallOptions := &testEnv.WebhookInstallOptions
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:             scheme,
-		Host:               webhookInstallOptions.LocalServingHost,
-		Port:               webhookInstallOptions.LocalServingPort,
-		CertDir:            webhookInstallOptions.LocalServingCertDir,
-		LeaderElection:     false,
-		MetricsBindAddress: "0",
+		Scheme:                 scheme,
+		HealthProbeBindAddress: "0",
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port:    webhookInstallOptions.LocalServingPort,
+			Host:    webhookInstallOptions.LocalServingHost,
+			CertDir: webhookInstallOptions.LocalServingCertDir,
+		}),
+		LeaderElection: false,
 	})
 	Expect(err).NotTo(HaveOccurred())
 

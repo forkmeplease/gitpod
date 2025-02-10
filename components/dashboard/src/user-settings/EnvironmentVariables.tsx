@@ -9,11 +9,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { Item, ItemField, ItemsList } from "../components/ItemsList";
 import Modal, { ModalBody, ModalFooter, ModalHeader } from "../components/Modal";
-import { getGitpodService } from "../service/service";
 import { PageWithSettingsSubMenu } from "./PageWithSettingsSubMenu";
 import { EnvironmentVariableEntry } from "./EnvironmentVariableEntry";
-import { Button } from "../components/Button";
 import { Heading2, Subheading } from "../components/typography/headings";
+import { envVarClient } from "../service/public-api";
+import { UserEnvironmentVariable } from "@gitpod/public-api/lib/gitpod/v1/envvar_pb";
+import { Button } from "@podkit/buttons/Button";
+import { TextInputField } from "../components/forms/TextInputField";
 
 interface EnvVarModalProps {
     envVar: UserEnvVarValue;
@@ -55,55 +57,37 @@ function AddEnvVarModal(p: EnvVarModalProps) {
             <ModalHeader>{isNew ? "New" : "Edit"} Variable</ModalHeader>
             <ModalBody>
                 {error ? (
-                    <div className="bg-gitpod-kumquat-light rounded-md p-3 text-gitpod-red text-sm mb-2">{error}</div>
+                    <div className="bg-kumquat-light rounded-md p-3 text-gitpod-red text-sm mb-2">{error}</div>
                 ) : null}
-                <div>
-                    <h4>Name</h4>
-                    <input
-                        autoFocus
-                        className="w-full"
-                        type="text"
-                        value={ev.name}
-                        onChange={(v) => {
-                            update({ name: v.target.value });
-                        }}
-                    />
-                </div>
-                <div className="mt-4">
-                    <h4>Value</h4>
-                    <input
-                        className="w-full"
-                        type="text"
-                        value={ev.value}
-                        onChange={(v) => {
-                            update({ value: v.target.value });
-                        }}
-                    />
-                </div>
-                <div className="mt-4">
-                    <h4>Scope</h4>
-                    <input
-                        className="w-full"
-                        type="text"
-                        value={ev.repositoryPattern}
-                        placeholder="e.g. owner/repository"
-                        onChange={(v) => {
-                            update({ repositoryPattern: v.target.value });
-                        }}
-                    />
-                </div>
-                <div className="mt-1">
-                    <p className="text-gray-500">
-                        You can pass a variable for a specific project or use wildcard character (<code>*/*</code>) to
-                        make it available in more projects.
-                    </p>
-                </div>
+                <TextInputField
+                    label="Name"
+                    value={ev.name}
+                    type="text"
+                    autoFocus
+                    onChange={(val) => update({ name: val })}
+                />
+
+                <TextInputField label="Value" value={ev.value} type="text" onChange={(val) => update({ value: val })} />
+
+                <TextInputField
+                    label="Scope"
+                    hint={
+                        <>
+                            You can pass a variable for a specific project or use wildcard character (<code>*/*</code>)
+                            to make it available in more projects.
+                        </>
+                    }
+                    value={ev.repositoryPattern}
+                    type="text"
+                    placeholder="e.g. owner/repository"
+                    onChange={(val) => update({ repositoryPattern: val })}
+                />
             </ModalBody>
             <ModalFooter>
-                <Button type="secondary" onClick={p.onClose}>
+                <Button variant="secondary" onClick={p.onClose}>
                     Cancel
                 </Button>
-                <Button htmlType="submit">{isNew ? "Add" : "Update"} Variable</Button>
+                <Button type="submit">{isNew ? "Add" : "Update"} Variable</Button>
             </ModalFooter>
         </Modal>
     );
@@ -125,7 +109,7 @@ function DeleteEnvVarModal(p: { variable: UserEnvVarValue; deleteVariable: () =>
                 <span className="truncate">Name</span>
                 <span className="truncate">Scope</span>
             </div>
-            <div className="grid grid-cols-2 gap-4 p-3 mt-3 text-gray-400 bg-gray-100 dark:bg-gray-800 rounded-xl">
+            <div className="grid grid-cols-2 gap-4 p-3 mt-3 text-gray-400 bg-pk-surface-secondary rounded-xl">
                 <span className="truncate text-gray-900 dark:text-gray-50">{p.variable.name}</span>
                 <span className="truncate text-sm">{p.variable.repositoryPattern}</span>
             </div>
@@ -133,7 +117,7 @@ function DeleteEnvVarModal(p: { variable: UserEnvVarValue; deleteVariable: () =>
     );
 }
 
-function sortEnvVars(a: UserEnvVarValue, b: UserEnvVarValue) {
+function sortEnvVars(a: UserEnvironmentVariable, b: UserEnvironmentVariable) {
     if (a.name === b.name) {
         return a.repositoryPattern > b.repositoryPattern ? 1 : -1;
     }
@@ -143,6 +127,7 @@ function sortEnvVars(a: UserEnvVarValue, b: UserEnvVarValue) {
 export default function EnvVars() {
     const [envVars, setEnvVars] = useState([] as UserEnvVarValue[]);
     const [currentEnvVar, setCurrentEnvVar] = useState({
+        id: undefined,
         name: "",
         value: "",
         repositoryPattern: "",
@@ -150,9 +135,16 @@ export default function EnvVars() {
     const [isAddEnvVarModalVisible, setAddEnvVarModalVisible] = useState(false);
     const [isDeleteEnvVarModalVisible, setDeleteEnvVarModalVisible] = useState(false);
     const update = async () => {
-        await getGitpodService()
-            .server.getAllEnvVars()
-            .then((r) => setEnvVars(r.sort(sortEnvVars)));
+        await envVarClient.listUserEnvironmentVariables({}).then((r) =>
+            setEnvVars(
+                r.environmentVariables.sort(sortEnvVars).map((e) => ({
+                    id: e.id,
+                    name: e.name,
+                    value: e.value,
+                    repositoryPattern: e.repositoryPattern,
+                })),
+            ),
+        );
     };
 
     useEffect(() => {
@@ -160,7 +152,7 @@ export default function EnvVars() {
     }, []);
 
     const add = () => {
-        setCurrentEnvVar({ name: "", value: "", repositoryPattern: "" });
+        setCurrentEnvVar({ id: undefined, name: "", value: "", repositoryPattern: "" });
         setAddEnvVarModalVisible(true);
         setDeleteEnvVarModalVisible(false);
     };
@@ -178,12 +170,28 @@ export default function EnvVars() {
     };
 
     const save = async (variable: UserEnvVarValue) => {
-        await getGitpodService().server.setEnvVar(variable);
+        if (variable.id) {
+            await envVarClient.updateUserEnvironmentVariable({
+                environmentVariableId: variable.id,
+                name: variable.name,
+                value: variable.value,
+                repositoryPattern: variable.repositoryPattern,
+            });
+        } else {
+            await envVarClient.createUserEnvironmentVariable({
+                name: variable.name,
+                value: variable.value,
+                repositoryPattern: variable.repositoryPattern,
+            });
+        }
+
         await update();
     };
 
     const deleteVariable = async (variable: UserEnvVarValue) => {
-        await getGitpodService().server.deleteEnvVar(variable);
+        await envVarClient.deleteUserEnvironmentVariable({
+            environmentVariableId: variable.id,
+        });
         await update();
     };
 
@@ -233,24 +241,24 @@ export default function EnvVars() {
                     </Subheading>
                 </div>
                 {envVars.length !== 0 ? (
-                    <div className="mt-3 flex mt-0">
-                        <button onClick={add} className="ml-2">
+                    <div className="flex mt-0">
+                        <Button onClick={add} className="ml-2">
                             New Variable
-                        </button>
+                        </Button>
                     </div>
                 ) : null}
             </div>
             {envVars.length === 0 ? (
-                <div className="bg-gray-100 dark:bg-gray-800 rounded-xl w-full h-96">
+                <div className="bg-pk-surface-secondary rounded-xl w-full h-96">
                     <div className="pt-28 flex flex-col items-center w-96 m-auto">
-                        <Heading2 color="light" className="text-center pb-3">
+                        <Heading2 className="text-pk-content-invert-secondary text-center pb-3">
                             No Environment Variables
                         </Heading2>
                         <Subheading className="text-center pb-6">
                             In addition to user-specific environment variables you can also pass variables through a
                             workspace creation URL.
                         </Subheading>
-                        <button onClick={add}>New Variable</button>
+                        <Button onClick={add}>New Variable</Button>
                     </div>
                 </div>
             ) : (

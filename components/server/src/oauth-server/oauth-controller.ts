@@ -10,12 +10,13 @@ import { User } from "@gitpod/gitpod-protocol";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 import { OAuthRequest, OAuthResponse } from "@jmondi/oauth2-server";
 import { handleExpressResponse, handleExpressError } from "@jmondi/oauth2-server/dist/adapters/express";
-import * as express from "express";
+import express from "express";
 import { inject, injectable } from "inversify";
 import { URL } from "url";
 import { Config } from "../config";
 import { clientRepository, createAuthorizationServer } from "./oauth-authorization-server";
-import { inMemoryDatabase } from "./db";
+import { inMemoryDatabase, toolboxClient } from "./db";
+import { getFeatureFlagEnableExperimentalJBTB } from "../util/featureflags";
 
 @injectable()
 export class OAuthController {
@@ -25,7 +26,7 @@ export class OAuthController {
 
     private getValidUser(req: express.Request, res: express.Response): User | null {
         if (!req.isAuthenticated() || !User.is(req.user)) {
-            const returnToPath = encodeURIComponent(`api${req.originalUrl}`);
+            const returnToPath = encodeURIComponent(`/api${req.originalUrl}`);
             const redirectTo = `${this.config.hostUrl}login?returnToPath=${returnToPath}`;
             res.redirect(redirectTo);
             return null;
@@ -101,7 +102,7 @@ export class OAuthController {
             if (!oauthClientsApproved || !oauthClientsApproved[clientID]) {
                 const client = await clientRepository.getByIdentifier(clientID);
                 if (client) {
-                    const returnToPath = encodeURIComponent(`api${req.originalUrl}`);
+                    const returnToPath = encodeURIComponent(`/api${req.originalUrl}`);
                     const redirectTo = `${this.config.hostUrl}oauth-approval?clientID=${client.id}&clientName=${client.name}&returnToPath=${returnToPath}`;
                     res.redirect(redirectTo);
                     return false;
@@ -145,6 +146,14 @@ export class OAuthController {
             if (!(await this.hasApproval(user, clientID.toString(), req, res))) {
                 res.sendStatus(400);
                 return;
+            }
+
+            if (clientID === toolboxClient.id) {
+                const enableExperimentalJBTB = await getFeatureFlagEnableExperimentalJBTB(user.id);
+                if (!enableExperimentalJBTB) {
+                    res.sendStatus(400);
+                    return false;
+                }
             }
 
             const request = new OAuthRequest(req);

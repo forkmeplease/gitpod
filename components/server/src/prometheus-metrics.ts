@@ -21,9 +21,7 @@ export function registerServerMetrics(registry: prometheusClient.Registry) {
     registry.registerMetric(stripeClientRequestsCompletedDurationSeconds);
     registry.registerMetric(imageBuildsStartedTotal);
     registry.registerMetric(imageBuildsCompletedTotal);
-    registry.registerMetric(centralizedPermissionsValidationsTotal);
     registry.registerMetric(spicedbClientLatency);
-    registry.registerMetric(dashboardErrorBoundary);
     registry.registerMetric(jwtCookieIssued);
     registry.registerMetric(jobStartedTotal);
     registry.registerMetric(jobsCompletedTotal);
@@ -33,7 +31,44 @@ export function registerServerMetrics(registry: prometheusClient.Registry) {
     registry.registerMetric(redisUpdatesReceived);
     registry.registerMetric(redisUpdatesCompletedTotal);
     registry.registerMetric(updateSubscribersRegistered);
+    registry.registerMetric(dbConnectionsTotal);
+    registry.registerMetric(dbConnectionsFree);
+    registry.registerMetric(grpcServerStarted);
+    registry.registerMetric(grpcServerHandling);
+    registry.registerMetric(spicedbCheckRequestsTotal);
+    registry.registerMetric(authorizerSubjectId);
 }
+
+export const grpcServerStarted = new prometheusClient.Counter({
+    name: "grpc_server_started_total",
+    help: "Total number of RPCs started on the server.",
+    labelNames: ["grpc_service", "grpc_method", "grpc_type"],
+});
+export const grpcServerHandled = new prometheusClient.Counter({
+    name: "grpc_server_handled_total",
+    help: "Total number of RPCs completed on the server, regardless of success or failure.",
+    labelNames: ["grpc_service", "grpc_method", "grpc_type", "grpc_code"],
+});
+export const grpcServerHandling = new prometheusClient.Histogram({
+    name: "grpc_server_handling_seconds",
+    help: "Histogram of response latency (seconds) of gRPC that had been application-level handled by the server.",
+    labelNames: ["grpc_service", "grpc_method", "grpc_type", "grpc_code"],
+});
+
+export const dbConnectionsTotal = new prometheusClient.Gauge({
+    name: "gitpod_typeorm_total_connections",
+    help: "Total number of connections in TypeORM pool",
+});
+
+export const dbConnectionsFree = new prometheusClient.Gauge({
+    name: "gitpod_typeorm_free_connections",
+    help: "Number of free connections in TypeORM pool",
+});
+
+export const dbConnectionsEnqueued = new prometheusClient.Counter({
+    name: "gitpod_typeorm_enqueued_connections",
+    help: "Number of times requests put on the queue, because the pool was maxed out.",
+});
 
 const loginCompletedTotal = new prometheusClient.Counter({
     name: "gitpod_login_completed_total",
@@ -50,6 +85,8 @@ type LoginCounterStatus =
     | "failed"
     // The login attempt succeeded
     | "succeeded"
+    // The login was successful, but we need to defer cookie creation via an OTS
+    | "succeeded_via_ots"
     // The login attempt failed, because the client failed to provide complete session information, for instance.
     | "failed_client";
 
@@ -167,6 +204,8 @@ export type FailedInstanceStartReason =
     | "clusterSelectionFailed"
     | "startOnClusterFailed"
     | "imageBuildFailed"
+    | "imageBuildFailedUser"
+    | "scmAccessFailed"
     | "resourceExhausted"
     | "workspaceClusterMaintenance"
     | "other";
@@ -212,16 +251,6 @@ export function increaseImageBuildsCompletedTotal(outcome: "succeeded" | "failed
     imageBuildsCompletedTotal.inc({ outcome });
 }
 
-const centralizedPermissionsValidationsTotal = new prometheusClient.Counter({
-    name: "gitpod_perms_centralized_validations_total",
-    help: "counter of centralized permission checks validations against existing system",
-    labelNames: ["operation", "matches_expectation"],
-});
-
-export function reportCentralizedPermsValidation(operation: string, matches: boolean) {
-    centralizedPermissionsValidationsTotal.inc({ operation, matches_expectation: String(matches) });
-}
-
 export const fgaRelationsUpdateClientLatency = new prometheusClient.Histogram({
     name: "gitpod_fga_relationship_update_seconds",
     help: "Histogram of completed relationship updates",
@@ -240,15 +269,6 @@ export function observeSpicedbClientLatency(operation: string, outcome: Error | 
     );
 }
 
-export const dashboardErrorBoundary = new prometheusClient.Counter({
-    name: "gitpod_dashboard_error_boundary_total",
-    help: "Total number of errors caught by an error boundary in the dashboard",
-});
-
-export function increaseDashboardErrorBoundaryCounter() {
-    dashboardErrorBoundary.inc();
-}
-
 export const jobStartedTotal = new prometheusClient.Counter({
     name: "gitpod_server_jobs_started_total",
     help: "Total number of errors caught by an error boundary in the dashboard",
@@ -262,11 +282,11 @@ export function reportJobStarted(name: string) {
 export const jobsCompletedTotal = new prometheusClient.Counter({
     name: "gitpod_server_jobs_completed_total",
     help: "Total number of errors caught by an error boundary in the dashboard",
-    labelNames: ["name", "success"],
+    labelNames: ["name", "success", "unitsOfWork"],
 });
 
-export function reportJobCompleted(name: string, success: boolean) {
-    jobsCompletedTotal.inc({ name, success: String(success) });
+export function reportJobCompleted(name: string, success: boolean, unitsOfWork?: number | undefined) {
+    jobsCompletedTotal.inc({ name, success: String(success), unitsOfWork: String(unitsOfWork) });
 }
 
 export const jobsDurationSeconds = new prometheusClient.Histogram({
@@ -325,4 +345,70 @@ export const updateSubscribersRegistered = new prometheusClient.Gauge({
     name: "gitpod_server_subscribers_registered",
     help: "Gauge of subscribers registered",
     labelNames: ["type"],
+});
+
+export const guardAccessChecksTotal = new prometheusClient.Counter({
+    name: "gitpod_guard_access_checks_total",
+    help: "Counter for the number of guard access checks we do by type",
+    labelNames: ["type"],
+});
+
+export type GuardAccessCheckType = "fga" | "resource-access" | "function-access";
+export function reportGuardAccessCheck(type: GuardAccessCheckType) {
+    guardAccessChecksTotal.labels(type).inc();
+}
+
+export const spicedbCheckRequestsTotal = new prometheusClient.Counter({
+    name: "gitpod_spicedb_requests_check_total",
+    help: "Counter for the number of check requests against SpiceDB",
+    labelNames: ["consistency"],
+});
+
+export type SpiceDBCheckConsistency =
+    | "minimizeLatency"
+    | "atLeastAsFresh"
+    | "atExactSnapshot"
+    | "fullyConsistent"
+    | "undefined";
+export function incSpiceDBRequestsCheckTotal(consistency: SpiceDBCheckConsistency) {
+    spicedbCheckRequestsTotal.labels(consistency).inc();
+}
+
+export const authorizerSubjectId = new prometheusClient.Counter({
+    name: "gitpod_authorizer_subject_id_total",
+    help: "Counter for the number of authorizer permission checks",
+    labelNames: ["match"],
+});
+type AuthorizerSubjectIdMatch = "ctx-user-id-missing" | "passed-subject-id-missing" | "match" | "mismatch";
+export function reportAuthorizerSubjectId(match: AuthorizerSubjectIdMatch) {
+    authorizerSubjectId.labels(match).inc();
+}
+
+export const scmTokenRefreshRequestsTotal = new prometheusClient.Counter({
+    name: "gitpod_scm_token_refresh_requests_total",
+    help: "Counter for the number of token refresh requests we issue against SCM systems",
+    labelNames: ["host", "result", "opportunisticRefresh"],
+});
+export type ScmTokenRefreshResult =
+    | "success"
+    | "timeout"
+    | "error"
+    | "still_valid"
+    | "no_token"
+    | "not_refreshable"
+    | "success_after_timeout";
+export type OpportunisticRefresh = "true" | "false" | "reserved";
+export function reportScmTokenRefreshRequest(
+    host: string,
+    opportunisticRefresh: OpportunisticRefresh,
+    result: ScmTokenRefreshResult,
+) {
+    scmTokenRefreshRequestsTotal.labels(host, result, opportunisticRefresh).inc();
+}
+
+export const scmTokenRefreshLatencyHistogram = new prometheusClient.Histogram({
+    name: "gitpod_scm_token_refresh_latency_seconds",
+    help: "SCM token refresh latency in seconds",
+    labelNames: ["host"],
+    buckets: [0.01, 0.1, 0.2, 0.5, 1, 2, 5, 10],
 });

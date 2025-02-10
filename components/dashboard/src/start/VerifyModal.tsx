@@ -7,13 +7,15 @@
 import { useState } from "react";
 import Alert, { AlertType } from "../components/Alert";
 import Modal, { ModalBody, ModalFooter, ModalHeader } from "../components/Modal";
-import { getGitpodService } from "../service/service";
 import PhoneInput from "react-intl-tel-input";
 import "react-intl-tel-input/dist/main.css";
 import "./phone-input.css";
-import { Button } from "../components/Button";
+import { Button } from "@podkit/buttons/Button";
 import { LinkButton } from "../components/LinkButton";
-import { useFeatureFlag } from "../data/featureflag-query";
+import { verificationClient } from "../service/public-api";
+import { InputField } from "../components/forms/InputField";
+import { TextInputField } from "../components/forms/TextInputField";
+import { Link } from "react-router-dom";
 
 interface VerifyModalState {
     phoneNumber?: string;
@@ -31,7 +33,6 @@ interface VerifyModalState {
 export function VerifyModal() {
     const [state, setState] = useState<VerifyModalState>({});
     const [verificationId, setVerificationId] = useState("");
-    const phoneVerificationByCall = useFeatureFlag("phoneVerificationByCall");
 
     if (!state.sent) {
         const sendCode = async () => {
@@ -41,7 +42,9 @@ export function VerifyModal() {
                     message: undefined,
                     sending: true,
                 });
-                const resp = await getGitpodService().server.sendPhoneNumberVerificationToken(state.phoneNumber || "");
+                const resp = await verificationClient.sendPhoneNumberVerificationToken({
+                    phoneNumber: state.phoneNumber || "",
+                });
                 setVerificationId(resp.verificationId);
                 setState({
                     ...state,
@@ -66,23 +69,30 @@ export function VerifyModal() {
                 onSubmit={sendCode}
                 title="User Validation Required"
                 buttons={
-                    <div>
-                        <Button htmlType="submit" disabled={!state.phoneNumberValid || state.sending}>
-                            {phoneVerificationByCall ? "Send Code via Voice call" : "Send Code via SMS"}
+                    <div className="space-x-4">
+                        <Link to="/billing">
+                            {/* secondary button */}
+                            <Button type="button" variant="secondary">
+                                Subscribe to paid plan
+                            </Button>
+                        </Link>
+                        <Button type="submit" disabled={!state.phoneNumberValid || state.sending}>
+                            {"Send Code via Voice call"}
                         </Button>
                     </div>
                 }
                 visible={true}
             >
                 <Alert type="warning" className="mt-2">
-                    To use Gitpod you'll need to validate your account with your phone number. This is required to
-                    discourage and reduce abuse on Gitpod infrastructure.
+                    To use Gitpod for free you'll need to validate your account with your phone number. This is required
+                    to discourage and reduce abuse on Gitpod infrastructure.
+                </Alert>
+                <Alert type="info" className="mt-4">
+                    Alternatively, you can verify by subscribing to our paid plan.
                 </Alert>
                 <div className="text-gray-600 dark:text-gray-400 mt-2">
-                    Enter a mobile phone number you would like to use to verify your account. Having trouble?{" "}
-                    <a className="gp-link" href="https://www.gitpod.io/contact/support">
-                        Contact support
-                    </a>
+                    Enter a mobile phone number you would like to use to verify your account. If you encounter issues,
+                    please retry later or use a different number.
                 </div>
                 {state.message ? (
                     <Alert type={state.message.type} className="mt-4 py-3">
@@ -91,8 +101,8 @@ export function VerifyModal() {
                 ) : (
                     <></>
                 )}
-                <div className="mt-4">
-                    <h4>Mobile Phone Number</h4>
+
+                <InputField label="Mobile Phone Number">
                     {/* HACK: Below we are adding a dummy dom element that is not visible, to reference the classes so they are not removed by purgeCSS. */}
                     <input type="tel" className="hidden intl-tel-input country-list" />
                     <PhoneInput
@@ -114,7 +124,7 @@ export function VerifyModal() {
                             });
                         }}
                     />
-                </div>
+                </InputField>
             </Modal>
         );
     } else if (!state.verified) {
@@ -123,11 +133,12 @@ export function VerifyModal() {
         };
         const verifyToken = async () => {
             try {
-                const verified = await getGitpodService().server.verifyPhoneNumberVerificationToken(
-                    state.phoneNumber!,
-                    state.token!,
+                const resp = await verificationClient.verifyPhoneNumberVerificationToken({
                     verificationId,
-                );
+                    token: state.token,
+                    phoneNumber: state.phoneNumber,
+                });
+                const verified = resp.verified;
                 if (verified) {
                     setState({
                         ...state,
@@ -170,8 +181,14 @@ export function VerifyModal() {
                 onSubmit={verifyToken}
                 title="User Validation Required"
                 buttons={
-                    <div>
-                        <Button htmlType="submit" disabled={!isTokenFilled()}>
+                    <div className="space-x-4">
+                        <Link to="/billing">
+                            {/* secondary button */}
+                            <Button type="button" variant="secondary">
+                                Subscribe to paid plan
+                            </Button>
+                        </Link>
+                        <Button type="submit" disabled={!isTokenFilled()}>
                             Validate Account
                         </Button>
                     </div>
@@ -179,18 +196,15 @@ export function VerifyModal() {
                 visible={true}
             >
                 <Alert type="warning" className="mt-2">
-                    To use Gitpod you'll need to validate your account with your phone number. This is required to
-                    discourage and reduce abuse on Gitpod infrastructure.
+                    To use Gitpod for free you'll need to validate your account with your phone number. This is required
+                    to discourage and reduce abuse on Gitpod infrastructure.
                 </Alert>
                 <div className="pt-4">
                     <LinkButton onClick={reset}>&larr; Use a different phone number</LinkButton>
                 </div>
                 <div className="text-gray-600 dark:text-gray-400 pt-4">
                     Enter the verification code we sent to {state.phoneNumber}.<br />
-                    Having trouble?{" "}
-                    <a className="gp-link" href="https://www.gitpod.io/contact/support">
-                        Contact support
-                    </a>
+                    If you encounter issues, please retry later or use a different number.
                 </div>
                 {state.message ? (
                     <Alert type={state.message.type} className="mt-4 py-3">
@@ -199,23 +213,19 @@ export function VerifyModal() {
                 ) : (
                     <></>
                 )}
-                <div className="mt-4">
-                    <h4>Verification Code</h4>
-                    <input
-                        autoFocus={true}
-                        className="w-full"
-                        type="text"
-                        placeholder={
-                            phoneVerificationByCall ? "Enter code sent via phone call" : "Enter code sent via SMS"
-                        }
-                        onChange={(v) => {
-                            setState({
-                                ...state,
-                                token: v.currentTarget.value,
-                            });
-                        }}
-                    />
-                </div>
+                <TextInputField
+                    label="Verification Code"
+                    placeholder={"Enter code sent via phone call"}
+                    type="text"
+                    value={state.token}
+                    autoFocus
+                    onChange={(val) => {
+                        setState({
+                            ...state,
+                            token: val,
+                        });
+                    }}
+                />
             </Modal>
         );
     } else {
@@ -231,7 +241,7 @@ export function VerifyModal() {
                     </Alert>
                 </ModalBody>
                 <ModalFooter>
-                    <Button htmlType="submit">Continue</Button>
+                    <Button type="submit">Continue</Button>
                 </ModalFooter>
             </Modal>
         );

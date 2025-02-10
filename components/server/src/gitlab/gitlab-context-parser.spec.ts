@@ -52,7 +52,8 @@ class TestGitlabContextParser {
     };
     static readonly BLO_BLA_ERROR_DATA = {
         host: "gitlab.com",
-        lastUpdate: undefined,
+        lastUpdate: "",
+        errorMessage: 'GitLab responded: "404 Project Not Found"',
         owner: "blo",
         repoName: "bla",
         userIsOwner: false,
@@ -245,7 +246,7 @@ class TestGitlabContextParser {
             chai.assert.fail();
         } catch (e) {
             if (GitLab.ApiError.is(e)) {
-                expect(e.httpError?.description).equals("404 Commit Not Found");
+                expect(e.code).equals(404);
             } else {
                 chai.assert.fail("Unknown Error: " + JSON.stringify(e));
             }

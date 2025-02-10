@@ -10,6 +10,8 @@ import {
     TeamMemberRole,
     TeamMembershipInvite,
     OrganizationSettings,
+    OrgEnvVar,
+    OrgEnvVarWithValue,
 } from "@gitpod/gitpod-protocol";
 import { DBTeamMembership } from "./typeorm/entity/db-team-membership";
 import { TransactionalDB } from "./typeorm/transactional-db-impl";
@@ -18,10 +20,10 @@ export const TeamDB = Symbol("TeamDB");
 export interface TeamDB extends TransactionalDB<TeamDB> {
     findTeams(
         offset: number,
-        limit: number,
+        limit: number | undefined,
         orderBy: keyof Team,
         orderDir: "ASC" | "DESC",
-        searchTerm: string,
+        searchTerm?: string,
     ): Promise<{ total: number; rows: Team[] }>;
     findTeamById(teamId: string): Promise<Team | undefined>;
     findTeamByMembershipId(membershipId: string): Promise<Team | undefined>;
@@ -40,7 +42,15 @@ export interface TeamDB extends TransactionalDB<TeamDB> {
     deleteTeam(teamId: string): Promise<void>;
 
     findOrgSettings(teamId: string): Promise<OrganizationSettings | undefined>;
-    setOrgSettings(teamId: string, settings: Partial<OrganizationSettings>): Promise<void>;
+    setOrgSettings(teamId: string, settings: Partial<OrganizationSettings>): Promise<OrganizationSettings>;
 
     hasActiveSSO(organizationId: string): Promise<boolean>;
+
+    addOrgEnvironmentVariable(orgId: string, envVar: OrgEnvVarWithValue): Promise<OrgEnvVar>;
+    updateOrgEnvironmentVariable(orgId: string, envVar: Partial<OrgEnvVarWithValue>): Promise<OrgEnvVar | undefined>;
+    getOrgEnvironmentVariableById(id: string): Promise<OrgEnvVar | undefined>;
+    findOrgEnvironmentVariableByName(orgId: string, name: string): Promise<OrgEnvVar | undefined>;
+    getOrgEnvironmentVariables(orgId: string): Promise<OrgEnvVar[]>;
+    getOrgEnvironmentVariableValues(envVars: Pick<OrgEnvVar, "id" | "orgId">[]): Promise<OrgEnvVarWithValue[]>;
+    deleteOrgEnvironmentVariable(id: string): Promise<void>;
 }

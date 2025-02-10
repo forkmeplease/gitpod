@@ -17,13 +17,15 @@ import {
 } from "@gitpod/gitpod-protocol";
 import { GitLabApi, GitLab } from "./api";
 import { UnauthorizedError, NotFoundError } from "../errors";
-import { GitLabScope } from "./scopes";
+import { GitLabOAuthScopes } from "@gitpod/public-api-common/lib/auth-providers";
 import { IContextParser, IssueContexts, AbstractContextParser, URLParts } from "../workspace/context-parser";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 import { GitLabTokenHelper } from "./gitlab-token-helper";
 import { TraceContext } from "@gitpod/gitpod-protocol/lib/util/tracing";
 const path = require("path");
 import { URL } from "url";
+import { RepoURL } from "../repohost";
+import { containsScopes } from "../prebuilds/token-scopes-inclusion";
 
 @injectable()
 export class GitlabContextParser extends AbstractContextParser implements IContextParser {
@@ -69,12 +71,14 @@ export class GitlabContextParser extends AbstractContextParser implements IConte
         } catch (error) {
             if (error && error.code === 401) {
                 const token = await this.tokenHelper.getCurrentToken(user);
-                if (token) {
-                    const scopes = token.scopes;
-                    // most likely the token needs to be updated after revoking by user.
-                    throw UnauthorizedError.create(this.config.host, scopes, "http-unauthorized");
-                }
-                throw UnauthorizedError.create(this.config.host, GitLabScope.Requirements.REPO);
+                throw UnauthorizedError.create({
+                    host: this.config.host,
+                    providerType: "Gitlab",
+                    requiredScopes: GitLabOAuthScopes.Requirements.DEFAULT,
+                    repoName: RepoURL.parseRepoUrl(contextUrl)?.repo,
+                    providerIsConnected: !!token,
+                    isMissingScopes: containsScopes(token?.scopes, GitLabOAuthScopes.Requirements.DEFAULT),
+                });
             }
             throw error;
         } finally {
@@ -186,7 +190,14 @@ export class GitlabContextParser extends AbstractContextParser implements IConte
                 throw error;
             }
             // log.error({ userId: user.id }, error);
-            throw await NotFoundError.create(await this.tokenHelper.getCurrentToken(user), user, host, owner, repoName);
+            throw await NotFoundError.create(
+                await this.tokenHelper.getCurrentToken(user),
+                user,
+                host,
+                owner,
+                repoName,
+                error.message,
+            );
         }
     }
 
@@ -222,7 +233,7 @@ export class GitlabContextParser extends AbstractContextParser implements IConte
             }
 
             const result = await this.gitlabApi.run<GitLab.TreeObject[]>(user, async (g) => {
-                return g.Repositories.tree(`${owner}/${repoName}`, {
+                return g.Repositories.allRepositoryTrees(`${owner}/${repoName}`, {
                     ref: branchOrTag.name,
                     path: path.dirname(branchOrTag.fullPath),
                 });
@@ -336,7 +347,14 @@ export class GitlabContextParser extends AbstractContextParser implements IConte
             return g.MergeRequests.show(`${owner}/${repoName}`, nr);
         });
         if (GitLab.ApiError.is(result)) {
-            throw await NotFoundError.create(await this.tokenHelper.getCurrentToken(user), user, host, owner, repoName);
+            throw await NotFoundError.create(
+                await this.tokenHelper.getCurrentToken(user),
+                user,
+                host,
+                owner,
+                repoName,
+                result.message,
+            );
         }
         const sourceProjectId = result.source_project_id;
         const targetProjectId = result.target_project_id;
@@ -421,10 +439,17 @@ export class GitlabContextParser extends AbstractContextParser implements IConte
     ): Promise<IssueContext> {
         const ctxPromise = this.handleDefaultContext(user, host, owner, repoName);
         const result = await this.gitlabApi.run<GitLab.Issue>(user, async (g) => {
-            return g.Issues.show(`${owner}/${repoName}`, nr);
+            return g.Issues.show(nr, { projectId: `${owner}/${repoName}` });
         });
         if (GitLab.ApiError.is(result)) {
-            throw await NotFoundError.create(await this.tokenHelper.getCurrentToken(user), user, host, owner, repoName);
+            throw await NotFoundError.create(
+                await this.tokenHelper.getCurrentToken(user),
+                user,
+                host,
+                owner,
+                repoName,
+                result.message,
+            );
         }
         const context = await ctxPromise;
         return <IssueContext>{
@@ -446,7 +471,14 @@ export class GitlabContextParser extends AbstractContextParser implements IConte
     ): Promise<NavigatorContext> {
         const repository = await this.fetchRepo(user, `${owner}/${repoName}`);
         if (GitLab.ApiError.is(repository)) {
-            throw await NotFoundError.create(await this.tokenHelper.getCurrentToken(user), user, host, owner, repoName);
+            throw await NotFoundError.create(
+                await this.tokenHelper.getCurrentToken(user),
+                user,
+                host,
+                owner,
+                repoName,
+                repository.message,
+            );
         }
         const commit = await this.fetchCommit(user, `${owner}/${repoName}`, sha);
         if (GitLab.ApiError.is(commit)) {

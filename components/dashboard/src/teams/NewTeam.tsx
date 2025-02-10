@@ -4,16 +4,20 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
-import { ConnectError } from "@bufbuild/connect-web";
+import { ConnectError } from "@connectrpc/connect";
 import { FormEvent, useState } from "react";
 import { useHistory } from "react-router-dom";
 import { Heading1, Heading3, Subheading } from "../components/typography/headings";
 import { useOrganizationsInvalidator } from "../data/organizations/orgs-query";
 import { useDocumentTitle } from "../hooks/use-document-title";
-import { publicApiTeamToProtocol, teamsService } from "../service/public-api";
-import { Button } from "../components/Button";
+import { organizationClient } from "../service/public-api";
+import { Button } from "@podkit/buttons/Button";
+import { TextInputField } from "../components/forms/TextInputField";
+import { cn } from "@podkit/lib/cn";
 
 export default function NewTeamPage() {
+    useDocumentTitle("New Organization");
+
     const invalidateOrgs = useOrganizationsInvalidator();
     const [name, setName] = useState("");
 
@@ -24,10 +28,10 @@ export default function NewTeamPage() {
         event.preventDefault();
 
         try {
-            const team = publicApiTeamToProtocol((await teamsService.createTeam({ name })).team!);
-
+            const team = await organizationClient.createOrganization({ name });
             invalidateOrgs();
-            history.push(`/?org=${team.id}`);
+            // Redirects to the new Org's dashboard
+            history.push(`/workspaces/?org=${team.organization?.id}`);
         } catch (error) {
             console.error(error);
             if (error instanceof ConnectError) {
@@ -38,8 +42,6 @@ export default function NewTeamPage() {
         }
     };
 
-    useDocumentTitle("New Organization");
-
     return (
         <div className="flex flex-col w-96 mt-24 mx-auto items-center">
             <Heading1>New&nbsp;Organization</Heading1>
@@ -48,22 +50,22 @@ export default function NewTeamPage() {
                     Organizations
                 </a>{" "}
                 allow you to manage related{" "}
-                <a href="https://www.gitpod.io/docs/configure/projects" className="gp-link">
-                    projects
+                <a href="https://www.gitpod.io/docs/configure/repositories" className="gp-link">
+                    repositories
                 </a>{" "}
                 and collaborate with other members.
             </Subheading>
-            <form className="mt-16" onSubmit={createTeam}>
-                <div className="rounded-xl p-6 bg-gray-50 dark:bg-gray-800">
+            <form className="mt-6 mb-4" onSubmit={createTeam}>
+                <div className="rounded-xl p-6 bg-pk-surface-secondary">
                     <Heading3>You're creating a new organization</Heading3>
                     <Subheading>After creating an organization, you can invite others to join.</Subheading>
-                    <br />
-                    <h4>Organization Name</h4>
-                    <input
+
+                    <TextInputField
+                        label="Organization Name"
+                        value={name}
                         autoFocus
-                        className={`w-full${!!creationError ? " error" : ""}`}
-                        type="text"
-                        onChange={(event) => setName(event.target.value)}
+                        className={cn("w-full", { error: !!creationError })}
+                        onChange={setName}
                     />
                     {!!creationError && (
                         <p className="text-gitpod-red">
@@ -72,8 +74,8 @@ export default function NewTeamPage() {
                     )}
                 </div>
                 <div className="flex flex-row-reverse space-x-2 space-x-reverse mt-2">
-                    <Button htmlType="submit">Create Organization</Button>
-                    <Button type="secondary" onClick={() => history.push("/")}>
+                    <Button type="submit">Create Organization</Button>
+                    <Button variant="secondary" onClick={() => history.push("/")}>
                         Cancel
                     </Button>
                 </div>

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
 /**
  * Copyright (c) 2022 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
@@ -12,16 +13,16 @@ import { Config } from "../config";
 import { Authenticator } from "../auth/authenticator";
 import { UserAuthentication } from "../user/user-authentication";
 
-import * as passport from "passport";
-import * as express from "express";
-import * as request from "supertest";
+import passport from "passport";
+import express from "express";
+import request from "supertest";
 
 import * as chai from "chai";
 import { OIDCCreateSessionPayload } from "./iam-oidc-create-session-payload";
-import { TeamMemberInfo, TeamMemberRole, User } from "@gitpod/gitpod-protocol";
+import { TeamMemberInfo, User } from "@gitpod/gitpod-protocol";
 import { OrganizationService } from "../orgs/organization-service";
 import { UserService } from "../user/user-service";
-import { UserDB } from "@gitpod/gitpod-db/lib";
+import { TeamDB, UserDB } from "@gitpod/gitpod-db/lib";
 const expect = chai.expect;
 
 @suite(timeout(10000))
@@ -39,9 +40,6 @@ class TestIamSessionApp {
     };
 
     protected userServiceMock: Partial<UserService> = {
-        createUser: (params) => {
-            return { id: "id-new-user" } as any;
-        },
         updateUser: (userId, update) => {
             return {} as any;
         },
@@ -66,8 +64,10 @@ class TestIamSessionApp {
         listMembers: async (teamId: string): Promise<TeamMemberInfo[]> => {
             return [];
         },
-        async addOrUpdateMember(userId: string, teamId: string, memberId: string, role: TeamMemberRole): Promise<void> {
-            this.memberships.add(memberId);
+        async createOrgOwnedUser(params): Promise<User> {
+            const user = { id: "id-new-user" } as any as User;
+            this.memberships.add(user.id);
+            return user;
         },
     };
 
@@ -122,6 +122,7 @@ class TestIamSessionApp {
                         return run();
                     },
                 }); // unused
+                bind(TeamDB).toConstantValue(<any>{}); // unused
             }),
         );
         this.app = container.get(IamSessionApp);

@@ -21,13 +21,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/utils/pointer"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	wsk8s "github.com/gitpod-io/gitpod/common-go/kubernetes"
 	"github.com/gitpod-io/gitpod/common-go/tracing"
 	csapi "github.com/gitpod-io/gitpod/content-service/api"
 	regapi "github.com/gitpod-io/gitpod/registry-facade/api"
+	"github.com/gitpod-io/gitpod/ws-manager-mk2/pkg/constants"
 	config "github.com/gitpod-io/gitpod/ws-manager/api/config"
 	workspacev1 "github.com/gitpod-io/gitpod/ws-manager/api/crd/v1"
 )
@@ -62,6 +63,7 @@ type startWorkspaceContext struct {
 	IDEPort        int32             `json:"idePort"`
 	SupervisorPort int32             `json:"supervisorPort"`
 	Headless       bool              `json:"headless"`
+	ServerVersion  *version.Info     `json:"serverVersion"`
 }
 
 // createWorkspacePod creates the actual workspace pod based on the definite workspace pod and appropriate
@@ -99,9 +101,7 @@ func (r *WorkspaceReconciler) createWorkspacePod(sctx *startWorkspaceContext) (*
 	if err != nil {
 		return nil, xerrors.Errorf("cannot create definite workspace pod: %w", err)
 	}
-	if err := ctrl.SetControllerReference(sctx.Workspace, pod, r.Scheme); err != nil {
-		return nil, err
-	}
+
 	err = combineDefiniteWorkspacePodWithTemplate(pod, podTemplate)
 	if err != nil {
 		return nil, xerrors.Errorf("cannot create workspace pod: %w", err)
@@ -280,11 +280,12 @@ func createDefiniteWorkspacePod(sctx *startWorkspaceContext) (*corev1.Pod, error
 		"prometheus.io/scrape": "true",
 		"prometheus.io/path":   "/metrics",
 		"prometheus.io/port":   strconv.Itoa(int(sctx.IDEPort)),
-		"container.apparmor.security.beta.kubernetes.io/workspace": "unconfined",
 		// prevent cluster-autoscaler from removing a node
 		// https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#what-types-of-pods-can-prevent-ca-from-removing-a-node
 		"cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
 	}
+
+	configureAppamor(sctx, annotations, workspaceContainer)
 
 	for k, v := range sctx.Workspace.Annotations {
 		annotations[k] = v
@@ -317,6 +318,17 @@ func createDefiniteWorkspacePod(sctx *startWorkspaceContext) (*corev1.Pod, error
 		},
 	}
 
+	if sctx.Config.EnableCustomSSLCertificate {
+		volumes = append(volumes, corev1.Volume{
+			Name: "gitpod-ca-crt",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "gitpod-customer-certificate-bundle"},
+				},
+			},
+		})
+	}
+
 	workloadType := "regular"
 	if sctx.Headless {
 		workloadType = "headless"
@@ -335,18 +347,6 @@ func createDefiniteWorkspacePod(sctx *startWorkspaceContext) (*corev1.Pod, error
 			Key:      "gitpod.io/registry-facade_ready_ns_" + sctx.Config.Namespace,
 			Operator: corev1.NodeSelectorOpExists,
 		},
-	}
-
-	if sctx.Config.ExperimentalMode {
-		matchExpressions = append(matchExpressions, corev1.NodeSelectorRequirement{
-			Key:      "gitpod.io/experimental",
-			Operator: corev1.NodeSelectorOpExists,
-		})
-	} else {
-		matchExpressions = append(matchExpressions, corev1.NodeSelectorRequirement{
-			Key:      "gitpod.io/experimental",
-			Operator: corev1.NodeSelectorOpDoesNotExist,
-		})
 	}
 
 	affinity := &corev1.Affinity{
@@ -463,6 +463,29 @@ func createWorkspaceContainer(sctx *startWorkspaceContext) (*corev1.Container, e
 
 	image := fmt.Sprintf("%s/%s/%s", sctx.Config.RegistryFacadeHost, regapi.ProviderPrefixRemote, sctx.Workspace.Name)
 
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:             workspaceVolumeName,
+			MountPath:        workspaceDir,
+			ReadOnly:         false,
+			MountPropagation: &mountPropagation,
+		},
+		{
+			MountPath:        "/.workspace",
+			Name:             "daemon-mount",
+			MountPropagation: &mountPropagation,
+		},
+	}
+
+	if sctx.Config.EnableCustomSSLCertificate {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "gitpod-ca-crt",
+			MountPath: "/etc/ssl/certs/gitpod-ca.crt",
+			SubPath:   "ca-certificates.crt",
+			ReadOnly:  true,
+		})
+	}
+
 	return &corev1.Container{
 		Name:            "workspace",
 		Image:           image,
@@ -475,19 +498,7 @@ func createWorkspaceContainer(sctx *startWorkspaceContext) (*corev1.Container, e
 			Limits:   limits,
 			Requests: requests,
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:             workspaceVolumeName,
-				MountPath:        workspaceDir,
-				ReadOnly:         false,
-				MountPropagation: &mountPropagation,
-			},
-			{
-				MountPath:        "/.workspace",
-				Name:             "daemon-mount",
-				MountPropagation: &mountPropagation,
-			},
-		},
+		VolumeMounts:             volumeMounts,
 		ReadinessProbe:           readinessProbe,
 		Env:                      env,
 		Command:                  command,
@@ -547,10 +558,23 @@ func createWorkspaceEnvironment(sctx *startWorkspaceContext) ([]corev1.EnvVar, e
 	result = append(result, corev1.EnvVar{Name: "THEIA_WEBVIEW_EXTERNAL_ENDPOINT", Value: "webview-{{hostname}}"})
 	result = append(result, corev1.EnvVar{Name: "THEIA_MINI_BROWSER_HOST_PATTERN", Value: "browser-{{hostname}}"})
 
+	result = append(result, corev1.EnvVar{Name: "GITPOD_SSH_CA_PUBLIC_KEY", Value: sctx.Workspace.Spec.SSHGatewayCAPublicKey})
+
 	// We don't require that Git be configured for workspaces
 	if sctx.Workspace.Spec.Git != nil {
 		result = append(result, corev1.EnvVar{Name: "GITPOD_GIT_USER_NAME", Value: sctx.Workspace.Spec.Git.Username})
 		result = append(result, corev1.EnvVar{Name: "GITPOD_GIT_USER_EMAIL", Value: sctx.Workspace.Spec.Git.Email})
+	}
+
+	if sctx.Config.EnableCustomSSLCertificate {
+		const (
+			customCAMountPath = "/etc/ssl/certs/gitpod-ca.crt"
+			certsMountPath    = "/etc/ssl/certs/"
+		)
+
+		result = append(result, corev1.EnvVar{Name: "NODE_EXTRA_CA_CERTS", Value: customCAMountPath})
+		result = append(result, corev1.EnvVar{Name: "GIT_SSL_CAPATH", Value: certsMountPath})
+		result = append(result, corev1.EnvVar{Name: "GIT_SSL_CAINFO", Value: customCAMountPath})
 	}
 
 	// System level env vars
@@ -591,8 +615,11 @@ func createWorkspaceEnvironment(sctx *startWorkspaceContext) ([]corev1.EnvVar, e
 	if err != nil {
 		return nil, xerrors.Errorf("cannot create environment: %w", err)
 	}
-	memoryInMegabyte := res.Memory().Value() / (1000 * 1000)
+	memoryInMegabyte := res.Memory().Value() / (1024 * 1024)
 	result = append(result, corev1.EnvVar{Name: "GITPOD_MEMORY", Value: strconv.FormatInt(memoryInMegabyte, 10)})
+
+	cpuCount := res.Cpu().Value()
+	result = append(result, corev1.EnvVar{Name: "GITPOD_CPU_COUNT", Value: strconv.FormatInt(int64(cpuCount), 10)})
 
 	if sctx.Headless {
 		result = append(result, corev1.EnvVar{Name: "GITPOD_HEADLESS", Value: "true"})
@@ -665,28 +692,41 @@ func createDefaultSecurityContext() (*corev1.SecurityContext, error) {
 	return res, nil
 }
 
-func newStartWorkspaceContext(ctx context.Context, cfg *config.Configuration, ws *workspacev1.Workspace) (res *startWorkspaceContext, err error) {
+func newStartWorkspaceContext(ctx context.Context, cfg *config.Configuration, ws *workspacev1.Workspace, serverVersion *version.Info) (res *startWorkspaceContext, err error) {
 	// we deliberately do not shadow ctx here as we need the original context later to extract the TraceID
 	span, _ := tracing.FromContext(ctx, "newStartWorkspaceContext")
 	defer tracing.FinishSpan(span, &err)
 
 	return &startWorkspaceContext{
 		Labels: map[string]string{
-			"app":                  "gitpod",
-			"component":            "workspace",
-			wsk8s.MetaIDLabel:      ws.Spec.Ownership.WorkspaceID,
-			wsk8s.WorkspaceIDLabel: ws.Name,
-			wsk8s.OwnerLabel:       ws.Spec.Ownership.Owner,
-			wsk8s.TypeLabel:        strings.ToLower(string(ws.Spec.Type)),
-			instanceIDLabel:        ws.Name,
-			headlessLabel:          strconv.FormatBool(ws.IsHeadless()),
+			"app":                         "gitpod",
+			"component":                   "workspace",
+			wsk8s.MetaIDLabel:             ws.Spec.Ownership.WorkspaceID,
+			wsk8s.WorkspaceIDLabel:        ws.Name,
+			wsk8s.OwnerLabel:              ws.Spec.Ownership.Owner,
+			wsk8s.TypeLabel:               strings.ToLower(string(ws.Spec.Type)),
+			wsk8s.WorkspaceManagedByLabel: constants.ManagedBy,
+			instanceIDLabel:               ws.Name,
+			headlessLabel:                 strconv.FormatBool(ws.IsHeadless()),
 		},
 		Config:         cfg,
 		Workspace:      ws,
 		IDEPort:        23000,
 		SupervisorPort: 22999,
 		Headless:       ws.IsHeadless(),
+		ServerVersion:  serverVersion,
 	}, nil
+}
+
+func configureAppamor(sctx *startWorkspaceContext, annotations map[string]string, workspaceContainer *corev1.Container) {
+	// pre K8s 1.30 we need to set the apparmor profile to unconfined as an annotation
+	if sctx.ServerVersion.Major <= "1" && sctx.ServerVersion.Minor < "30" {
+		annotations["container.apparmor.security.beta.kubernetes.io/workspace"] = "unconfined"
+	} else {
+		workspaceContainer.SecurityContext.AppArmorProfile = &corev1.AppArmorProfile{
+			Type: corev1.AppArmorProfileTypeUnconfined,
+		}
+	}
 }
 
 // validCookieChars contains all characters which may occur in an HTTP Cookie value (unicode \u0021 through \u007E),

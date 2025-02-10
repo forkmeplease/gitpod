@@ -35,8 +35,6 @@ type Config struct {
 type CommonConfig struct {
 	// Deprecated.
 	PodConfig map[string]*PodConfig `json:"podConfig,omitempty"`
-	// Deprecated use a secret instead in messageBus.credentials
-	StaticMessagebusPassword string `json:"staticMessagebusPassword"`
 }
 
 type PodConfig struct {
@@ -109,7 +107,8 @@ type WorkspaceConfig struct {
 		} `json:"runtime"`
 	} `json:"wsDaemon"`
 
-	WorkspaceClasses map[string]WorkspaceClass `json:"classes,omitempty"`
+	WorkspaceClasses        map[string]WorkspaceClass `json:"classes,omitempty"`
+	PreferredWorkspaceClass string                    `json:"preferredWorkspaceClass,omitempty"`
 
 	WSProxy struct {
 		IngressHeader                              string `json:"ingressHeader"`
@@ -125,13 +124,18 @@ type WorkspaceConfig struct {
 	} `json:"contentService"`
 
 	EnableProtectedSecrets *bool `json:"enableProtectedSecrets"`
-	UseMk2ExperimentalMode bool  `json:"useMk2ExperimentalMode,omitempty"`
+
+	ImageBuilderMk3 struct {
+		BaseImageRepositoryName      string `json:"baseImageRepositoryName"`
+		WorkspaceImageRepositoryName string `json:"workspaceImageRepositoryName"`
+	} `json:"imageBuilderMk3"`
 }
 
 type WorkspaceClass struct {
-	Name      string             `json:"name" validate:"required"`
-	Resources WorkspaceResources `json:"resources" validate:"required"`
-	Templates WorkspaceTemplates `json:"templates,omitempty"`
+	Name        string             `json:"name" validate:"required"`
+	Description string             `json:"description"`
+	Resources   WorkspaceResources `json:"resources" validate:"required"`
+	Templates   WorkspaceTemplates `json:"templates,omitempty"`
 }
 
 type WorkspaceResources struct {
@@ -183,6 +187,12 @@ type SpiceDBConfig struct {
 	SecretRef string `json:"secretRef"`
 }
 
+type RedisConfig struct {
+	Address   string `json:"address,omitempty"`
+	Username  string `json:"username,omitempty"`
+	SecretRef string `json:"secretRef,omitempty"`
+}
+
 type WebAppConfig struct {
 	PublicAPI *PublicAPIConfig `json:"publicApi,omitempty"`
 
@@ -203,6 +213,17 @@ type WebAppConfig struct {
 	IAM                          *IAMConfig             `json:"iam,omitempty"`
 	SpiceDB                      *SpiceDBConfig         `json:"spicedb,omitempty"`
 	CertmanagerNamespaceOverride string                 `json:"certmanagerNamespaceOverride,omitempty"`
+	Redis                        *RedisConfig           `json:"redis"`
+
+	// ProxySettings is used if the gitpod cell uses some proxy for connectivity
+	ProxySettings *ProxySettings `json:"proxySettings"`
+}
+
+type ProxySettings struct {
+	HttpProxy  string `json:"http_proxy"`
+	HttpsProxy string `json:"https_proxy"`
+	// NoProxy setting should be used for the CIDRs and hostnames that should be not using the proxy URLs
+	NoProxy string `json:"no_proxy"`
 }
 
 type WorkspaceDefaults struct {
@@ -248,11 +269,14 @@ type ServerConfig struct {
 	DisableWorkspaceGarbageCollection bool              `json:"disableWorkspaceGarbageCollection"`
 	DisableCompleteSnapshotJob        bool              `json:"disableCompleteSnapshotJob"`
 	InactivityPeriodForReposInDays    *int              `json:"inactivityPeriodForReposInDays"`
-	ShowSetupModal                    *bool             `json:"showSetupModal"`
-	IsSingleOrgInstallation           bool              `json:"isSingleOrgInstallation"`
+	// deprecated: use IsDedicatedInstallation instead
+	IsSingleOrgInstallation bool `json:"isSingleOrgInstallation"`
+	IsDedicatedInstallation bool `json:"isDedicatedInstallation"`
 
 	// @deprecated use containerRegistry.privateBaseImageAllowList instead
 	DefaultBaseImageRegistryWhiteList []string `json:"defaultBaseImageRegistryWhitelist"`
+
+	GoogleCloudProfilerEnabled bool `json:"gcpProfilerEnabled,omitempty"`
 }
 
 type ProxyConfig struct {

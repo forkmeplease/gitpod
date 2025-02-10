@@ -8,7 +8,7 @@ import * as crypto from "crypto";
 import { inject, injectable } from "inversify";
 import { OneTimeSecretDB, TeamDB, UserDB, WorkspaceDB } from "@gitpod/gitpod-db/lib";
 import { BUILTIN_INSTLLATION_ADMIN_USER_ID } from "@gitpod/gitpod-db/lib/user-db";
-import * as express from "express";
+import express from "express";
 import { Authenticator } from "../auth/authenticator";
 import { Config } from "../config";
 import { log, LogContext } from "@gitpod/gitpod-protocol/lib/util/logging";
@@ -21,15 +21,23 @@ import { getRequestingClientInfo } from "../express-util";
 import { GitpodToken, GitpodTokenType, User } from "@gitpod/gitpod-protocol";
 import { HostContextProvider } from "../auth/host-context-provider";
 import { reportJWTCookieIssued } from "../prometheus-metrics";
-import { OwnerResourceGuard, ResourceAccessGuard, ScopedResourceGuard } from "../auth/resource-access";
+import {
+    FGAResourceAccessGuard,
+    OwnerResourceGuard,
+    ResourceAccessGuard,
+    ScopedResourceGuard,
+} from "../auth/resource-access";
 import { OneTimeSecretServer } from "../one-time-secret-server";
 import { ClientMetadata } from "../websocket/websocket-connection-manager";
 import * as fs from "fs/promises";
 import { ApplicationError, ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
 import { GitpodServerImpl } from "../workspace/gitpod-server-impl";
-import { WorkspaceStarter } from "../workspace/workspace-starter";
 import { StopWorkspacePolicy } from "@gitpod/ws-manager/lib";
 import { UserService } from "./user-service";
+import { WorkspaceService } from "../workspace/workspace-service";
+import { runWithSubjectId } from "../util/request-context";
+import { SubjectId } from "../auth/subject-id";
+import { TrustedValue } from "@gitpod/gitpod-protocol/lib/util/scrubbing";
 
 export const ServerFactory = Symbol("ServerFactory");
 export type ServerFactory = () => GitpodServerImpl;
@@ -47,7 +55,7 @@ export class UserController {
     @inject(SessionHandler) protected readonly sessionHandler: SessionHandler;
     @inject(OneTimeSecretServer) protected readonly otsServer: OneTimeSecretServer;
     @inject(OneTimeSecretDB) protected readonly otsDb: OneTimeSecretDB;
-    @inject(WorkspaceStarter) protected readonly workspaceStarter: WorkspaceStarter;
+    @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
     @inject(ServerFactory) private readonly serverFactory: ServerFactory;
 
     get apiRouter(): express.Router {
@@ -99,7 +107,9 @@ export class UserController {
                         throw new ApplicationError(401, "Invalid OTS key");
                     }
 
-                    const user = await this.userService.findUserById(userId, userId);
+                    const user = await runWithSubjectId(SubjectId.fromUserId(userId), () =>
+                        this.userService.findUserById(userId, userId),
+                    );
                     if (!user) {
                         throw new ApplicationError(404, "User not found");
                     }
@@ -204,6 +214,14 @@ export class UserController {
                 res.cookie(cookie.name, cookie.value, cookie.opts);
                 reportJWTCookieIssued();
 
+                // If returnTo was passed and it's safe, redirect to it
+                const returnTo = this.getSafeReturnToParam(req);
+                if (returnTo) {
+                    log.info(`Redirecting after OTS login ${returnTo}`);
+                    res.redirect(returnTo);
+                    return;
+                }
+
                 res.sendStatus(200);
             }),
         );
@@ -240,13 +258,18 @@ export class UserController {
 
             // stop all running workspaces
             const user = req.user as User;
-            if (user) {
-                this.workspaceStarter
-                    .stopRunningWorkspacesForUser({}, user.id, "logout", StopWorkspacePolicy.NORMALLY)
-                    .catch((error) =>
-                        log.error(logContext, "cannot stop workspaces on logout", { error, ...logPayload }),
-                    );
-            }
+            await runWithSubjectId(SubjectId.fromUserId(user.id), async () => {
+                if (user) {
+                    this.workspaceService
+                        .stopRunningWorkspacesForUser({}, user.id, user.id, "logout", StopWorkspacePolicy.NORMALLY)
+                        .catch((error) =>
+                            log.error(logContext, "cannot stop workspaces on logout", { error, ...logPayload }),
+                        );
+                }
+
+                // reset the FGA state
+                await this.userService.resetFgaVersion(user.id, user.id);
+            });
 
             const redirectToUrl = this.getSafeReturnToParam(req) || this.config.hostUrl.toString();
 
@@ -255,7 +278,7 @@ export class UserController {
             }
 
             // clear cookies
-            this.sessionHandler.clearSessionCookie(res, this.config);
+            this.sessionHandler.clearSessionCookie(res);
 
             // then redirect
             log.info(logContext, "(Logout) Redirecting...", { redirectToUrl, ...logPayload });
@@ -387,38 +410,44 @@ export class UserController {
                     return;
                 }
                 const sessionId = req.body.sessionId;
-                const server = this.createGitpodServer(user, new OwnerResourceGuard(user.id));
-                try {
-                    await server.sendHeartBeat({}, { wasClosed: true, instanceId: instanceID });
-                    /** no await */ server
-                        .trackEvent(
-                            {},
-                            {
-                                event: "ide_close_signal",
-                                properties: {
-                                    sessionId,
-                                    instanceId: instanceID,
-                                    clientKind: "supervisor-frontend",
+
+                await runWithSubjectId(SubjectId.fromUserId(user.id), async () => {
+                    const resourceGuard = new FGAResourceAccessGuard(user.id, new OwnerResourceGuard(user.id));
+                    const server = this.createGitpodServer(user, resourceGuard);
+                    try {
+                        await server.sendHeartBeat({}, { wasClosed: true, instanceId: instanceID });
+                        /** no await */ server
+                            .trackEvent(
+                                {},
+                                {
+                                    event: "ide_close_signal",
+                                    properties: {
+                                        sessionId,
+                                        instanceId: instanceID,
+                                        clientKind: "supervisor-frontend",
+                                    },
                                 },
-                            },
-                        )
-                        .catch((err) => log.warn(logCtx, "workspacePageClose: failed to track ide close signal", err));
-                    res.sendStatus(200);
-                } catch (e) {
-                    if (ApplicationError.hasErrorCode(e)) {
-                        res.status(e.code).send(e.message);
-                        log.warn(
-                            logCtx,
-                            `workspacePageClose: server sendHeartBeat respond with code: ${e.code}, message: ${e.message}`,
-                        );
+                            )
+                            .catch((err) =>
+                                log.warn(logCtx, "workspacePageClose: failed to track ide close signal", err),
+                            );
+                        res.sendStatus(200);
+                    } catch (e) {
+                        if (ApplicationError.hasErrorCode(e)) {
+                            res.status(e.code).send(e.message);
+                            log.warn(
+                                logCtx,
+                                `workspacePageClose: server sendHeartBeat respond with code: ${e.code}, message: ${e.message}`,
+                            );
+                            return;
+                        }
+                        log.error(logCtx, "workspacePageClose failed", e);
+                        res.sendStatus(500);
                         return;
+                    } finally {
+                        server.dispose();
                     }
-                    log.error(logCtx, "workspacePageClose failed", e);
-                    res.sendStatus(500);
-                    return;
-                } finally {
-                    server.dispose();
-                }
+                });
             },
         );
         if (this.config.enableLocalApp) {
@@ -598,7 +627,7 @@ export class UserController {
             return returnToURL;
         }
 
-        log.debug("The redirect URL does not match", { query: req.query });
+        log.debug("The redirect URL does not match", { query: new TrustedValue(req.query).value });
         return;
     }
 
@@ -634,6 +663,7 @@ export class UserController {
             throw err;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         return new AdminCredentials(payload.tokenHash, payload.expiresAt, payload.algo);
     }
 }

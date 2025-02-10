@@ -223,8 +223,7 @@ func LaunchWorkspaceDirectly(t *testing.T, ctx context.Context, api *ComponentAP
 		},
 		Type: wsmanapi.WorkspaceType_REGULAR,
 		Spec: &wsmanapi.StartWorkspaceSpec{
-			WorkspaceImage:     workspaceImage,
-			DeprecatedIdeImage: ideImage,
+			WorkspaceImage: workspaceImage,
 			IdeImage: &wsmanapi.IDEImage{
 				WebRef: ideImage,
 			},
@@ -329,6 +328,7 @@ func LaunchWorkspaceFromContextURL(t *testing.T, ctx context.Context, contextURL
 
 type LaunchWorkspaceOptions struct {
 	ContextURL  string
+	ProjectID   string
 	IDESettings *protocol.IDESettings
 }
 
@@ -371,16 +371,19 @@ func LaunchWorkspaceWithOptions(t *testing.T, ctx context.Context, opts *LaunchW
 		teams, _ := server.GetTeams(cctx)
 		var orgId string
 		if len(teams) == 0 {
-			// hack: there might be a better value to use here
-			orgId = u
+			team, err := server.CreateTeam(cctx, "test-team")
+			if err != nil {
+				return nil, nil, xerrors.Errorf("cannot create team: %w", err)
+			}
+			orgId = team.ID
 		} else {
 			orgId = teams[0].ID
 		}
 
 		resp, err = server.CreateWorkspace(cctx, &protocol.CreateWorkspaceOptions{
 			ContextURL:                         opts.ContextURL,
+			ProjectId:                          opts.ProjectID,
 			OrganizationId:                     orgId,
-			IgnoreRunningPrebuild:              true,
 			IgnoreRunningWorkspaceOnSameCommit: true,
 			StartWorkspaceOptions: protocol.StartWorkspaceOptions{
 				IdeSettings: opts.IDESettings,
@@ -472,20 +475,29 @@ func LaunchWorkspaceWithOptions(t *testing.T, ctx context.Context, opts *LaunchW
 
 func stopWsF(t *testing.T, instanceID string, workspaceID string, api *ComponentAPI, isPrebuild bool) StopWorkspaceFunc {
 	var already bool
-	return func(waitForStop bool, api *ComponentAPI) (*wsmanapi.WorkspaceStatus, error) {
+	var unlocked bool
+	return func(waitForStop bool, api *ComponentAPI) (s *wsmanapi.WorkspaceStatus, err error) {
 		if already {
 			t.Logf("already sent stop request: %s", instanceID)
 			return nil, nil
 		}
+		already = true
 
-		var err error
-		defer func() {
-			if already {
-				return
-			} else {
+		tryUnlockParallelLimiter := func() {
+			if !unlocked {
+				unlocked = true
 				<-parallelLimiter
 			}
-			already = true
+		}
+
+		defer func() {
+			if err == nil {
+				return
+			}
+
+			// Only unlock on error here, otherwise we'll unlock below
+			// after waiting for the workspace to stop.
+			tryUnlockParallelLimiter()
 		}()
 
 		sctx, scancel := context.WithTimeout(context.Background(), perCallTimeout)
@@ -526,11 +538,8 @@ func stopWsF(t *testing.T, instanceID string, workspaceID string, api *Component
 			break
 		}
 
-		if !waitForStop {
-			return nil, nil
-		}
-
-		for {
+		waitAndUnlock := func() (*wsmanapi.WorkspaceStatus, error) {
+			defer tryUnlockParallelLimiter()
 			select {
 			case err := <-errCh:
 				return nil, err
@@ -539,6 +548,19 @@ func stopWsF(t *testing.T, instanceID string, workspaceID string, api *Component
 				return s, nil
 			}
 		}
+
+		if !waitForStop {
+			// Still wait for stop asynchroniously to unblock the parallelLimiter
+			go func() {
+				_, err = waitAndUnlock()
+				if err != nil {
+					t.Logf("error while waiting asynchronously for workspace to stop: %v", err)
+				}
+			}()
+			return nil, nil
+		}
+
+		return waitAndUnlock()
 	}
 }
 
@@ -696,7 +718,7 @@ func WaitForWorkspaceStart(t *testing.T, ctx context.Context, instanceID string,
 					return nil, false, nil
 				}
 				if !cfg.CanFail {
-					return nil, true, xerrors.New("the workspace couldn't be found")
+					return nil, true, xerrors.Errorf("the workspace %s couldn't be found", instanceID)
 				}
 				return nil, true, nil
 			}

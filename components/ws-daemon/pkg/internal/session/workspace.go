@@ -56,8 +56,10 @@ type Workspace struct {
 	// workspace resides. If this workspace has no Git working copy, this field is an empty string.
 	CheckoutLocation string `json:"checkoutLocation"`
 
-	CreatedAt       time.Time        `json:"createdAt"`
-	DoBackup        bool             `json:"doBackup"`
+	CreatedAt time.Time `json:"createdAt"`
+	DoBackup  bool      `json:"doBackup"`
+	// DoWipe is a mode that a) does not make backups and b) ensures leaving a clean slate on workspace stop
+	DoWipe          bool             `json:"doWipe"`
 	Owner           string           `json:"owner"`
 	WorkspaceID     string           `json:"metaID"`
 	InstanceID      string           `json:"workspaceID"`
@@ -85,7 +87,7 @@ func (s *Workspace) OWI() logrus.Fields {
 type WorkspaceState string
 
 const (
-	// WorkspaceInitializing means the workspace content is is currently being initialized
+	// WorkspaceInitializing means the workspace content is currently being initialized
 	WorkspaceInitializing WorkspaceState = "initializing"
 	// WorkspaceReady means the workspace content is available on disk
 	WorkspaceReady WorkspaceState = "ready"

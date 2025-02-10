@@ -14,6 +14,7 @@
 #
 
 set -euo pipefail
+set -x
 
 REPORT=""
 TEST_SUITE=all
@@ -80,7 +81,7 @@ if [ "${REPORT}" != "" ]; then
 fi
 args+=( "-kubeconfig=${KUBECONFIG:-/home/gitpod/.kube/config}" )
 args+=( "-namespace=${NAMESPACE:-default}" )
-args+=( "-timeout=60m" )
+args+=( "-timeout=120m" )
 
 if [[ "${GITPOD_REPO_ROOT:-}" != "" ]]; then
   echo "Running in Gitpod workspace. Fetching USER_NAME and USER_TOKEN"
@@ -114,7 +115,17 @@ if [ "$TEST_SUITE" == "workspace" ]; then
 
   set +e
   # shellcheck disable=SC2086
-  go test -p 10 -v $TEST_LIST "${args[@]}" -parallel-features=true 2>&1  | go-junit-report -subtest-mode=exclude-parents -set-exit-code -out "${RESULTS_DIR}/TEST-${TEST_NAME}.xml" -iocopy
+  go test -p 4 -v $TEST_LIST "${args[@]}" -parallel-features=true -skip-labels="type=maintenance" 2>&1  | go-junit-report -subtest-mode=exclude-parents -set-exit-code -out "${RESULTS_DIR}/TEST-${TEST_NAME}.xml" -iocopy
+  RC=${PIPESTATUS[0]}
+  set -e
+
+  if [ "${RC}" -ne "0" ]; then
+    FAILURE_COUNT=$((FAILURE_COUNT+1))
+  fi
+
+  set +e
+  # shellcheck disable=SC2086
+  go test -v $TEST_LIST "${args[@]}" -labels="type=maintenance" 2>&1
   RC=${PIPESTATUS[0]}
   set -e
 
@@ -135,7 +146,7 @@ else
 
     cd "${TEST_PATH}"
     set +e
-    go test -v ./... "${args[@]}" 2>&1 | go-junit-report -subtest-mode=exclude-parents -set-exit-code -out "${RESULTS_DIR}/TEST-${TEST_NAME}.xml" -iocopy
+    go test -parallel=3 -v ./... "${args[@]}" 2>&1 | go-junit-report -subtest-mode=exclude-parents -set-exit-code -out "${RESULTS_DIR}/TEST-${TEST_NAME}.xml" -iocopy
     RC=${PIPESTATUS[0]}
     set -e
     cd -

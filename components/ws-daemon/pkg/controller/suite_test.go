@@ -25,6 +25,7 @@ import (
 
 	//+kubebuilder:scaffold:imports
 
+	"github.com/gitpod-io/gitpod/common-go/util"
 	workspacev1 "github.com/gitpod-io/gitpod/ws-manager/api/crd/v1"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -50,11 +51,16 @@ func TestAPIs(t *testing.T) {
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
+	crdPath := filepath.Join("..", "..", "crd")
+	if !util.InLeewayBuild() {
+		crdPath = filepath.Join("..", "..", "..", "ws-manager-mk2", "config", "crd", "bases")
+	}
+
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		ControlPlaneStartTimeout: 1 * time.Minute,
 		ControlPlaneStopTimeout:  1 * time.Minute,
-		CRDDirectoryPaths:        []string{filepath.Join("..", "..", "crd")},
+		CRDDirectoryPaths:        []string{crdPath},
 		ErrorIfCRDPathMissing:    true,
 	}
 
@@ -72,13 +78,12 @@ var _ = BeforeSuite(func() {
 	Expect(k8sClient).NotTo(BeNil())
 
 	k8sManager, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:             scheme.Scheme,
-		MetricsBindAddress: ":0",
+		Scheme: scheme.Scheme,
 	})
 	Expect(err).ToNot(HaveOccurred())
 	ctx, cancel = context.WithCancel(context.Background())
 
-	workspaceCtrl, err = NewWorkspaceController(k8sClient, record.NewFakeRecorder(100), NodeName, secretsNamespace, 5, nil, ctrl_metrics.Registry)
+	workspaceCtrl, err = NewWorkspaceController(k8sClient, record.NewFakeRecorder(100), NodeName, secretsNamespace, 5, nil, ctrl_metrics.Registry, nil)
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(workspaceCtrl.SetupWithManager(k8sManager)).To(Succeed())

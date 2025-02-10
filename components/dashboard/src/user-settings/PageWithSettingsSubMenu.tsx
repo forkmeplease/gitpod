@@ -4,9 +4,8 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
-import { useMemo } from "react";
 import { PageWithSubMenu } from "../components/PageWithSubMenu";
-import { useFeatureFlag } from "../data/featureflag-query";
+import { useInstallationConfiguration } from "../data/installation/installation-config-query";
 import {
     settingsPathAccount,
     settingsPathIntegrations,
@@ -25,12 +24,7 @@ export interface PageWithAdminSubMenuProps {
 }
 
 export function PageWithSettingsSubMenu({ children }: PageWithAdminSubMenuProps) {
-    const enablePersonalAccessTokens = useFeatureFlag("personalAccessTokensEnabled");
-
-    const settingsMenu = useMemo(() => {
-        return getSettingsMenu(enablePersonalAccessTokens);
-    }, [enablePersonalAccessTokens]);
-
+    const settingsMenu = useUserSettingsMenu();
     return (
         <PageWithSubMenu subMenu={settingsMenu} title="User Settings" subtitle="Manage your personal account settings.">
             {children}
@@ -38,16 +32,23 @@ export function PageWithSettingsSubMenu({ children }: PageWithAdminSubMenuProps)
     );
 }
 
-function getSettingsMenu(enablePersonalAccessTokens?: boolean) {
+function useUserSettingsMenu() {
+    const { data: installationConfig } = useInstallationConfiguration();
+    const isGitpodIo = installationConfig?.isDedicatedInstallation === false;
+
     return [
         {
             title: "Account",
             link: [settingsPathAccount, settingsPathMain],
         },
-        {
-            title: "Notifications",
-            link: [settingsPathNotifications],
-        },
+        ...(isGitpodIo
+            ? [
+                  {
+                      title: "Notifications",
+                      link: [settingsPathNotifications],
+                  },
+              ]
+            : []),
         {
             title: "Variables",
             link: [settingsPathVariables],
@@ -60,18 +61,14 @@ function getSettingsMenu(enablePersonalAccessTokens?: boolean) {
             title: "Git Providers",
             link: [settingsPathIntegrations, "/access-control"],
         },
-        ...(enablePersonalAccessTokens
-            ? [
-                  {
-                      title: "Access Tokens",
-                      link: [
-                          settingsPathPersonalAccessTokens,
-                          settingsPathPersonalAccessTokenCreate,
-                          settingsPathPersonalAccessTokenEdit,
-                      ],
-                  },
-              ]
-            : []),
+        {
+            title: "Access Tokens",
+            link: [
+                settingsPathPersonalAccessTokens,
+                settingsPathPersonalAccessTokenCreate,
+                settingsPathPersonalAccessTokenEdit,
+            ],
+        },
         {
             title: "Preferences",
             link: [settingsPathPreferences],
